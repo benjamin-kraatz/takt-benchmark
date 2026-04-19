@@ -112,19 +112,9 @@ fn resolve_space_map() -> Result<HashMap<PathBuf, (u64, u64)>> {
     let mut space_map = HashMap::new();
 
     for line in stdout.lines().skip(1) {
-        let mut columns = line.split_whitespace();
-        let _filesystem = columns.next();
-        let total_kib = columns.next().and_then(|value| value.parse::<u64>().ok());
-        let _used = columns.next();
-        let available_kib = columns.next().and_then(|value| value.parse::<u64>().ok());
-        let _capacity = columns.next();
-        let mount_point = columns.next();
-
-        if let (Some(total_kib), Some(available_kib), Some(mount_point)) =
-            (total_kib, available_kib, mount_point)
-        {
+        if let Some((mount_point, total_kib, available_kib)) = parse_df_line(line) {
             space_map.insert(
-                PathBuf::from(mount_point),
+                mount_point,
                 (
                     total_kib.saturating_mul(1024),
                     available_kib.saturating_mul(1024),
@@ -134,6 +124,22 @@ fn resolve_space_map() -> Result<HashMap<PathBuf, (u64, u64)>> {
     }
 
     Ok(space_map)
+}
+
+fn parse_df_line(line: &str) -> Option<(PathBuf, u64, u64)> {
+    let columns = line.split_whitespace().collect::<Vec<_>>();
+    if columns.len() < 6 {
+        return None;
+    }
+
+    let total_kib = columns.get(1)?.parse::<u64>().ok()?;
+    let available_kib = columns.get(3)?.parse::<u64>().ok()?;
+    let mount_point = columns[5..].join(" ");
+    if mount_point.is_empty() {
+        return None;
+    }
+
+    Some((PathBuf::from(mount_point), total_kib, available_kib))
 }
 
 fn device_name(mount_point: &Path, source: &str) -> String {
@@ -294,5 +300,32 @@ pub(crate) fn base_device_name(source: &str) -> Option<String> {
         Some(name)
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::parse_df_line;
+
+    #[test]
+    fn parses_df_line_with_spaces_in_mount_point() {
+        let line = "/dev/disk18s2     61104088  16397872  44706216    27%    /Volumes/Install macOS Sonoma";
+        let parsed = parse_df_line(line).expect("expected df line to parse");
+
+        assert_eq!(parsed.0, PathBuf::from("/Volumes/Install macOS Sonoma"));
+        assert_eq!(parsed.1, 61_104_088);
+        assert_eq!(parsed.2, 44_706_216);
+    }
+
+    #[test]
+    fn parses_df_line_without_spaces_in_mount_point() {
+        let line = "/dev/disk19s1      1986208    284736   1701472    15%    /Volumes/RetroPie";
+        let parsed = parse_df_line(line).expect("expected df line to parse");
+
+        assert_eq!(parsed.0, PathBuf::from("/Volumes/RetroPie"));
+        assert_eq!(parsed.1, 1_986_208);
+        assert_eq!(parsed.2, 1_701_472);
     }
 }
