@@ -29,16 +29,65 @@ riedspied is a Rust workspace for benchmarking mounted storage targets on macOS 
 - Windows support.
 - Cross-machine result synchronization.
 
-## Running
+## Running the Apps
+
+Build and run commands are executed from the workspace root.
+
+### Run the CLI
+
+Use the CLI when you want scripted runs, terminal output, or direct export from the command line.
+
+List discovered benchmark targets:
 
 ```bash
 cargo run -p riedspied-cli -- list --verbose
-cargo run -p riedspied-cli -- bench --target /Volumes/MyDrive --profile balanced --bench sequential-write --bench sustained-write --tag baseline
-cargo run -p riedspied-cli -- bench --target /Volumes/MyDrive --profile balanced --export-format html --export-path ./latest-report.html
+```
+
+Run a benchmark against a mounted target:
+
+```bash
+cargo run -p riedspied-cli -- bench \
+  --target /Volumes/MyDrive \
+  --profile balanced \
+  --bench sequential-write \
+  --bench sustained-write \
+  --tag baseline
+```
+
+Run a benchmark and export the result immediately:
+
+```bash
+cargo run -p riedspied-cli -- bench \
+  --target /Volumes/MyDrive \
+  --profile balanced \
+  --export-format html \
+  --export-path ./latest-report.html
+```
+
+Inspect saved history and export previous runs:
+
+```bash
 cargo run -p riedspied-cli -- history --limit 5 --profile balanced --verbose
 cargo run -p riedspied-cli -- export --latest --format png --output ./latest-chart.png
+```
+
+### Run the GUI
+
+Use the GUI when you want interactive target selection, live progress, history filtering, comparison views, annotations, and export previews.
+
+Start the desktop app:
+
+```bash
 cargo run -p riedspied-gui
 ```
+
+Inside the GUI you can:
+
+- select a mounted target and benchmark profile
+- choose which benchmarks to run
+- inspect the latest run and saved history
+- compare two runs or review same-device trends
+- export runs with the built-in preview panel and native save dialog
 
 ## Safety model
 
