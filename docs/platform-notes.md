@@ -3,6 +3,7 @@
 ## macOS
 
 - Device discovery is based on mounted filesystems reported by `mount` and capacity data from `df -kP`.
+- Additional metadata is enriched from `diskutil info` and, when possible, `system_profiler SPUSBDataType`.
 - The root system volume is included so the built-in storage medium can be benchmarked.
 - External removable volumes typically appear under `/Volumes`.
 - Results can be influenced by APFS behavior, cache warmup, and USB power management.
@@ -10,6 +11,7 @@
 ## Linux
 
 - Device discovery is based on `mount` plus `df -kP`.
+- Additional metadata is enriched from `lsblk`, sysfs, and mount options when available.
 - The root filesystem is included for benchmarking built-in storage.
 - Removable drives and SD cards usually appear under `/media`, `/run/media`, or `/mnt`.
 - Mounted NFS and SMB shares are treated as filesystem targets, not protocol-level throughput tests.
@@ -19,6 +21,7 @@
 - Cache flushing is not forced. Reported read throughput can therefore benefit from page cache after earlier passes.
 - The benchmark engine does not yet attempt privileged raw-device access.
 - MTP/PTP devices are intentionally excluded from v1 because they do not behave like normal mounted filesystems.
+- Vendor, bus, and USB-generation hints are best-effort only and may be unavailable on some hardware or mount paths.
 
 ## Recommended validation targets
 

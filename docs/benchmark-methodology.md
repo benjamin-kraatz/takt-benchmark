@@ -26,6 +26,12 @@ Random IOPS uses a fixed-size scratch file, seeks to random block offsets, and p
 
 Each benchmark run uses a hidden `.riedspied-*` directory on the target. The directory is removed after completion unless the caller explicitly requests retention.
 
+## Benchmark selection
+
+Both front ends can now run any subset of the available benchmark types. This makes it practical to skip long sustained tests during quick validation or isolate one behavior such as random IOPS.
+
+Exports should always be interpreted in the context of the selected subset. A report that only includes sequential write and sustained write is not directly comparable with a report that includes all benchmark types.
+
 ## Interpretation caveats
 
 The current implementation benchmarks the mounted filesystem path. Results therefore include:

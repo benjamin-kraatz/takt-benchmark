@@ -218,11 +218,52 @@ pub struct BenchmarkResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkRunRecord {
+    #[serde(default)]
+    pub run_id: String,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
     pub target: DeviceTarget,
     pub profile: BenchmarkProfile,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
     pub results: Vec<BenchmarkResult>,
+}
+
+impl BenchmarkRunRecord {
+    pub fn ensure_defaults(&mut self) {
+        if self.run_id.is_empty() {
+            self.run_id = build_run_id(&self.started_at, &self.target.id);
+        }
+    }
+
+    pub fn display_name(&self) -> String {
+        format!(
+            "{} · {} · {}",
+            self.target.name,
+            self.profile.preset,
+            self.started_at.format("%Y-%m-%d %H:%M:%S")
+        )
+    }
+
+    pub fn series_label(&self) -> String {
+        let mut label = format!(
+            "{} {}",
+            self.started_at.format("%m-%d %H:%M"),
+            self.profile.preset,
+        );
+        if !self.tags.is_empty() {
+            label.push_str(&format!(" [{}]", self.tags.join(",")));
+        }
+        label
+    }
+
+    pub fn result_for(&self, benchmark: BenchmarkType) -> Option<&BenchmarkResult> {
+        self.results
+            .iter()
+            .find(|result| result.benchmark == benchmark)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -293,12 +334,32 @@ pub fn run_benchmark_suite(
     }
 
     Ok(BenchmarkRunRecord {
+        run_id: build_run_id(&started_at, &target.id),
         started_at,
         finished_at: Utc::now(),
         target: target.clone(),
         profile: configuration.profile,
+        tags: Vec::new(),
+        notes: None,
         results,
     })
+}
+
+pub fn build_run_id(started_at: &DateTime<Utc>, target_id: &str) -> String {
+    let suffix = target_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .filter(|character| *character != '-')
+        .take(12)
+        .collect::<String>();
+
+    format!("{}-{}", started_at.format("%Y%m%d%H%M%S"), suffix)
 }
 
 pub(crate) fn benchmark_file(context: &BenchmarkContext, name: &str) -> PathBuf {
@@ -473,6 +534,7 @@ mod tests {
             kind: DeviceKind::BuiltIn,
             total_bytes: 64 * 1024 * 1024,
             available_bytes: 32 * 1024 * 1024,
+            metadata: Default::default(),
         };
 
         let result = BenchmarkProfile::balanced().validate_for(&target);

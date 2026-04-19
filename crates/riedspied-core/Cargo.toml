@@ -9,6 +9,8 @@ rust-version.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 directories.workspace = true
+html-escape.workspace = true
+plotters.workspace = true
 rand = { workspace = true, features = ["small_rng"] }
 serde.workspace = true
 serde_json.workspace = true

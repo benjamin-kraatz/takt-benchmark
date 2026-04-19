@@ -51,7 +51,7 @@ impl TerminalReporter {
     }
 }
 
-pub fn print_device_table(devices: &[riedspied_core::DeviceTarget]) {
+pub fn print_device_table(devices: &[riedspied_core::DeviceTarget], verbose: bool) {
     for device in devices {
         println!(
             "{:<20} {:<12} {:<12} {:>8} GiB free {:>8} GiB total {}",
@@ -62,6 +62,29 @@ pub fn print_device_table(devices: &[riedspied_core::DeviceTarget]) {
             gib(device.total_bytes),
             device.mount_point.display(),
         );
+        if verbose {
+            println!(
+                "  source={} readonly={} removable={} storage={} bus={} protocol={} model={} vendor={} usb={} mount-options={}",
+                device.source,
+                device.metadata.is_read_only,
+                device
+                    .metadata
+                    .is_removable
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                device.storage_hint().unwrap_or("unknown"),
+                device.transport_hint().unwrap_or("unknown"),
+                device.metadata.network_protocol.as_deref().unwrap_or("-"),
+                device.metadata.model.as_deref().unwrap_or("-"),
+                device.metadata.vendor.as_deref().unwrap_or("-"),
+                device.metadata.usb_generation.as_deref().unwrap_or("-"),
+                if device.metadata.mount_options.is_empty() {
+                    "-".to_string()
+                } else {
+                    device.metadata.mount_options.join(",")
+                }
+            );
+        }
     }
 }
 
@@ -72,6 +95,10 @@ pub fn print_run_summary(run: &BenchmarkRunRecord) {
         run.target.mount_point.display(),
         run.profile.preset,
     );
+    println!("Run ID: {}", run.run_id);
+    if !run.tags.is_empty() {
+        println!("Tags: {}", run.tags.join(", "));
+    }
     for result in &run.results {
         println!(
             "- {:<18} avg {:>8.1} MiB/s peak {:>8.1} MiB/s min {:>8.1} MiB/s{}{}",
@@ -91,14 +118,20 @@ pub fn print_run_summary(run: &BenchmarkRunRecord) {
     }
 }
 
-pub fn print_history(records: &[BenchmarkRunRecord]) {
+pub fn print_history(records: &[BenchmarkRunRecord], verbose: bool) {
     for record in records {
         println!(
-            "{}  {}  {}  {} results",
+            "{}  {}  {}  {} results  id={}{}",
             record.started_at.format("%Y-%m-%d %H:%M:%S"),
             record.target.name,
             record.profile.preset,
             record.results.len(),
+            record.run_id,
+            if record.tags.is_empty() {
+                String::new()
+            } else {
+                format!("  tags={}", record.tags.join(","))
+            }
         );
         for result in &record.results {
             println!(
@@ -112,7 +145,30 @@ pub fn print_history(records: &[BenchmarkRunRecord]) {
                     .unwrap_or_default(),
             );
         }
+        if verbose {
+            println!(
+                "  target={} fs={} readonly={} transport={} model={} vendor={}",
+                record.target.mount_point.display(),
+                record.target.filesystem,
+                record.target.metadata.is_read_only,
+                record.target.transport_hint().unwrap_or("unknown"),
+                record.target.metadata.model.as_deref().unwrap_or("-"),
+                record.target.metadata.vendor.as_deref().unwrap_or("-")
+            );
+            if let Some(notes) = &record.notes {
+                println!("  notes={notes}");
+            }
+        }
     }
+}
+
+pub fn print_export_notice(format: &str, path: &std::path::Path, run_count: usize) {
+    println!(
+        "Exported {} run(s) as {} to {}",
+        run_count,
+        format,
+        path.display()
+    );
 }
 
 fn gib(bytes: u64) -> u64 {

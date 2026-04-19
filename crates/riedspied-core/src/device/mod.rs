@@ -18,6 +18,28 @@ pub enum DeviceKind {
     Unknown,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeviceMetadata {
+    #[serde(default)]
+    pub mount_options: Vec<String>,
+    #[serde(default)]
+    pub is_read_only: bool,
+    #[serde(default)]
+    pub is_removable: Option<bool>,
+    #[serde(default)]
+    pub is_rotational: Option<bool>,
+    #[serde(default)]
+    pub vendor: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub bus: Option<String>,
+    #[serde(default)]
+    pub network_protocol: Option<String>,
+    #[serde(default)]
+    pub usb_generation: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceTarget {
     pub id: String,
@@ -28,6 +50,8 @@ pub struct DeviceTarget {
     pub kind: DeviceKind,
     pub total_bytes: u64,
     pub available_bytes: u64,
+    #[serde(default)]
+    pub metadata: DeviceMetadata,
 }
 
 impl DeviceTarget {
@@ -38,13 +62,29 @@ impl DeviceTarget {
 
         self.available_bytes as f64 / self.total_bytes as f64
     }
+
+    pub fn storage_hint(&self) -> Option<&'static str> {
+        match self.metadata.is_rotational {
+            Some(true) => Some("HDD"),
+            Some(false) => Some("SSD/flash"),
+            None => None,
+        }
+    }
+
+    pub fn transport_hint(&self) -> Option<&str> {
+        self.metadata
+            .bus
+            .as_deref()
+            .or(self.metadata.network_protocol.as_deref())
+    }
 }
 
 #[derive(Debug, Clone)]
-struct MountEntry {
+pub(crate) struct MountEntry {
     source: String,
     mount_point: PathBuf,
     filesystem: String,
+    mount_options: Vec<String>,
 }
 
 pub fn discover_devices() -> Result<Vec<DeviceTarget>> {
@@ -132,7 +172,7 @@ fn classify_kind(mount_point: &Path, source: &str, filesystem: &str) -> DeviceKi
     DeviceKind::Unknown
 }
 
-fn hydrate_targets(entries: Vec<MountEntry>) -> Result<Vec<DeviceTarget>> {
+pub(crate) fn hydrate_targets(entries: Vec<MountEntry>) -> Result<Vec<DeviceTarget>> {
     let space_map = resolve_space_map()?;
     let mut devices = Vec::new();
 
@@ -148,6 +188,12 @@ fn hydrate_targets(entries: Vec<MountEntry>) -> Result<Vec<DeviceTarget>> {
                 kind: classify_kind(&entry.mount_point, &entry.source, &entry.filesystem),
                 total_bytes: *total_bytes,
                 available_bytes: *available_bytes,
+                metadata: DeviceMetadata {
+                    is_read_only: is_read_only_mount(&entry.mount_options),
+                    mount_options: entry.mount_options.clone(),
+                    network_protocol: network_protocol(&entry.source, &entry.filesystem),
+                    ..Default::default()
+                },
             });
         }
     }
@@ -155,4 +201,98 @@ fn hydrate_targets(entries: Vec<MountEntry>) -> Result<Vec<DeviceTarget>> {
     devices.sort_by(|left, right| left.mount_point.cmp(&right.mount_point));
     devices.dedup_by(|left, right| left.mount_point == right.mount_point);
     Ok(devices)
+}
+
+pub(crate) fn is_read_only_mount(options: &[String]) -> bool {
+    options.iter().any(|option| {
+        matches!(
+            option.as_str(),
+            "ro" | "read-only" | "read-only volume" | "read-only media"
+        )
+    })
+}
+
+pub(crate) fn network_protocol(source: &str, filesystem: &str) -> Option<String> {
+    if filesystem.eq_ignore_ascii_case("nfs") || source.contains(":/") {
+        return Some("NFS".to_string());
+    }
+    if matches!(filesystem, "smbfs" | "cifs") || source.starts_with("//") {
+        return Some("SMB".to_string());
+    }
+    if filesystem.eq_ignore_ascii_case("afpfs") {
+        return Some("AFP".to_string());
+    }
+    if filesystem.eq_ignore_ascii_case("webdav") {
+        return Some("WebDAV".to_string());
+    }
+
+    None
+}
+
+pub(crate) fn capture_command(command: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(command).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+pub(crate) fn parse_key_value_lines(text: &str) -> HashMap<String, String> {
+    text.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            let value = value.trim();
+            if value.is_empty() {
+                None
+            } else {
+                Some((key.trim().to_string(), value.to_string()))
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn normalize_bool(value: Option<&str>) -> Option<bool> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "yes" | "true" | "1" => Some(true),
+        "no" | "false" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+pub(crate) fn clean_value(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() || value == "-" || value == "(null)" {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+pub(crate) fn base_device_name(source: &str) -> Option<String> {
+    let name = Path::new(source).file_name()?.to_str()?.to_string();
+
+    if let Some((prefix, suffix)) = name.rsplit_once('s') {
+        if prefix.starts_with("disk") && suffix.chars().all(|character| character.is_ascii_digit())
+        {
+            return Some(prefix.to_string());
+        }
+    }
+
+    if let Some((prefix, suffix)) = name.rsplit_once('p') {
+        if prefix
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_digit())
+            && suffix.chars().all(|character| character.is_ascii_digit())
+        {
+            return Some(prefix.to_string());
+        }
+    }
+
+    let trimmed = name.trim_end_matches(|character: char| character.is_ascii_digit());
+    if trimmed.is_empty() {
+        Some(name)
+    } else {
+        Some(trimmed.to_string())
+    }
 }

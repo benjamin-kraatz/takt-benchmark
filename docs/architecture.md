@@ -15,6 +15,8 @@ The core crate owns:
 
 The benchmark runner creates a dedicated temporary directory on the selected target and executes the requested benchmark suite inside that directory. Progress is streamed through a callback that both the CLI and GUI consume.
 
+The core crate also owns the shared export pipeline so JSON, Markdown, HTML, and PNG reports are generated once and reused by both front ends.
+
 ### `riedspied-cli`
 
 The CLI is intentionally thin. It only:
@@ -23,10 +25,13 @@ The CLI is intentionally thin. It only:
 - constructs the selected profile and benchmark list
 - renders progress and summary output
 - saves completed runs into the history store
+- exports selected runs through the shared export layer
 
 ### `riedspied-gui`
 
 The GUI runs the same benchmark suite inside a background thread. Progress events are sent through an `mpsc` channel into the UI state, where they drive the live throughput chart and current-phase display.
+
+History analysis stays GUI-side. The app reads the same persisted `BenchmarkRunRecord` values and builds filtering, per-run detail views, same-device trend charts, direct run comparison, and annotation editing on top of those records.
 
 ## Execution flow
 

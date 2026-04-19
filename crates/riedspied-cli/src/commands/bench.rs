@@ -1,9 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use riedspied_core::{
-    BenchmarkProfile, BenchmarkType, DeviceTarget, HistoryStore, ProfilePreset, RunConfiguration,
-    discover_devices, run_benchmark_suite,
+    BenchmarkProfile, BenchmarkRunRecord, BenchmarkType, DeviceTarget, ExportFormat, HistoryStore,
+    ProfilePreset, RunConfiguration, discover_devices, export_runs_to_path, run_benchmark_suite,
 };
 
 use crate::output::TerminalReporter;
@@ -31,6 +31,25 @@ pub enum BenchmarkChoice {
     SequentialRead,
     SustainedWrite,
     RandomIops,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ExportFormatChoice {
+    Json,
+    Markdown,
+    Html,
+    Png,
+}
+
+impl From<ExportFormatChoice> for ExportFormat {
+    fn from(value: ExportFormatChoice) -> Self {
+        match value {
+            ExportFormatChoice::Json => ExportFormat::Json,
+            ExportFormatChoice::Markdown => ExportFormat::Markdown,
+            ExportFormatChoice::Html => ExportFormat::Html,
+            ExportFormatChoice::Png => ExportFormat::Png,
+        }
+    }
 }
 
 impl From<BenchmarkChoice> for BenchmarkType {
@@ -68,7 +87,8 @@ pub fn run_benchmark(
     requested_benchmarks: Vec<BenchmarkChoice>,
     keep_temp_files: bool,
     store_history: bool,
-) -> Result<riedspied_core::BenchmarkRunRecord> {
+    tags: Vec<String>,
+) -> Result<BenchmarkRunRecord> {
     let target = find_target(target)?;
     let profile = BenchmarkProfile::from_preset(profile.into());
     let benchmarks = if requested_benchmarks.is_empty() {
@@ -83,10 +103,11 @@ pub fn run_benchmark(
     };
 
     let mut reporter = TerminalReporter::new();
-    let run = run_benchmark_suite(&target, configuration, None, |update| {
+    let mut run = run_benchmark_suite(&target, configuration, None, |update| {
         reporter.update(update);
     })?;
     reporter.finish();
+    run.tags = tags;
 
     if store_history {
         let store = HistoryStore::default_store()?;
@@ -96,13 +117,57 @@ pub fn run_benchmark(
     Ok(run)
 }
 
-pub fn load_history(limit: usize) -> Result<Vec<riedspied_core::BenchmarkRunRecord>> {
+pub fn load_history(
+    limit: usize,
+    target_filter: Option<&str>,
+    profile_filter: Option<ProfileChoice>,
+) -> Result<Vec<BenchmarkRunRecord>> {
     if limit == 0 {
         bail!("history limit must be greater than zero");
     }
 
     let store = HistoryStore::default_store()?;
     let mut records = store.load()?;
+    if let Some(target_filter) = target_filter {
+        records.retain(|record| {
+            record.target.name.eq_ignore_ascii_case(target_filter)
+                || record.target.mount_point == Path::new(target_filter)
+                || record.target.id == target_filter
+        });
+    }
+    if let Some(profile_filter) = profile_filter {
+        let selected_profile: ProfilePreset = profile_filter.into();
+        records.retain(|record| record.profile.preset == selected_profile);
+    }
     records.truncate(limit);
     Ok(records)
+}
+
+pub fn export_runs(
+    run_ids: Vec<String>,
+    latest: bool,
+    format: ExportFormatChoice,
+    output: PathBuf,
+    title: Option<String>,
+) -> Result<usize> {
+    let store = HistoryStore::default_store()?;
+    let runs = if latest {
+        store.load()?.into_iter().take(1).collect::<Vec<_>>()
+    } else {
+        store.load_selected(&run_ids)?
+    };
+
+    if runs.is_empty() {
+        bail!("no benchmark runs matched the export selection");
+    }
+
+    let export_title = title.unwrap_or_else(|| {
+        if runs.len() == 1 {
+            format!("Benchmark export: {}", runs[0].display_name())
+        } else {
+            format!("Benchmark comparison export ({})", runs.len())
+        }
+    });
+    export_runs_to_path(format.into(), &export_title, &runs, &output)?;
+    Ok(runs.len())
 }

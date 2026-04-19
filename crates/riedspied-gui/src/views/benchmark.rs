@@ -1,12 +1,15 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
-use riedspied_core::{BenchmarkRunRecord, DeviceTarget, ProfilePreset, ProgressUpdate};
+use riedspied_core::{
+    BenchmarkRunRecord, BenchmarkType, DeviceTarget, ProfilePreset, ProgressUpdate,
+};
 
 pub fn show_controls(
     ui: &mut egui::Ui,
     devices: &[DeviceTarget],
     selected_target: &mut Option<String>,
     profile: &mut ProfilePreset,
+    selected_benchmarks: &mut Vec<BenchmarkType>,
     last_progress: Option<&ProgressUpdate>,
     live_samples: &[[f64; 2]],
 ) {
@@ -51,6 +54,27 @@ pub fn show_controls(
             });
     });
 
+    ui.label("Benchmarks");
+    ui.horizontal_wrapped(|ui| {
+        for benchmark in BenchmarkType::ALL {
+            let mut enabled = selected_benchmarks.contains(&benchmark);
+            if ui.checkbox(&mut enabled, benchmark.label()).changed() {
+                if enabled {
+                    selected_benchmarks.push(benchmark);
+                    selected_benchmarks.sort_by_key(|candidate| {
+                        BenchmarkType::ALL
+                            .iter()
+                            .position(|item| item == candidate)
+                            .unwrap_or_default()
+                    });
+                    selected_benchmarks.dedup();
+                } else {
+                    selected_benchmarks.retain(|candidate| candidate != &benchmark);
+                }
+            }
+        }
+    });
+
     if let Some(progress) = last_progress {
         ui.label(format!(
             "Current phase: {} {} {:.1} MiB/s after {:.1}s",
@@ -74,6 +98,25 @@ pub fn show_controls(
     ui.label(
         "Targets include built-in system storage, removable media, and mounted network shares.",
     );
+    if let Some(selected_target) = selected_target.as_ref() {
+        if let Some(device) = devices.iter().find(|device| &device.id == selected_target) {
+            ui.label(format!(
+                "Selected target: {} | readonly={} | transport={} | storage={} | model={} | vendor={} | usb={} | mount options={}",
+                device.mount_point.display(),
+                device.metadata.is_read_only,
+                device.transport_hint().unwrap_or("unknown"),
+                device.storage_hint().unwrap_or("unknown"),
+                device.metadata.model.as_deref().unwrap_or("-"),
+                device.metadata.vendor.as_deref().unwrap_or("-"),
+                device.metadata.usb_generation.as_deref().unwrap_or("-"),
+                if device.metadata.mount_options.is_empty() {
+                    "-".to_string()
+                } else {
+                    device.metadata.mount_options.join(",")
+                }
+            ));
+        }
+    }
 }
 
 pub fn show_run_summary(ui: &mut egui::Ui, run: &BenchmarkRunRecord) {
