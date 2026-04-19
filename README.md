@@ -18,6 +18,7 @@ riedspied is a Rust workspace for benchmarking mounted storage targets on macOS 
 - macOS and Linux mounted-filesystem discovery.
 - Benchmark subset selection in the CLI and GUI.
 - JSON, Markdown, HTML, and PNG export.
+- Native GUI save-file picker with remembered export directory.
 - GUI history filtering, per-run detail views, direct comparison, and same-device trend charts.
 - Richer device metadata such as read-only hints, removable hints, transport hints, vendor or model when available, and network protocol hints.
 
@@ -63,11 +64,18 @@ The GUI now supports:
 
 - selecting benchmark subsets before a run
 - exporting the latest run or selected history runs
+- browsing for export destinations with a native save dialog and remembered folder
 - filtering history by device and profile
 - opening a detailed run view with overview and drill-down charts
 - comparing two runs directly
 - viewing same-device trends over time
 - tagging and annotating saved runs
+
+PNG exports now render as richer report images instead of a single benchmark summary line:
+
+- single-run exports use a 2x2 benchmark panel layout
+- two-run exports use per-benchmark overlay panels
+- same-device multi-run exports automatically switch to trend-style panels
 
 ## Verification
 
@@ -75,7 +83,7 @@ The GUI now supports:
 cargo fmt --all
 cargo clippy --workspace --all-targets
 cargo test --workspace
-cargo run -p riedspied-cli -- list
+cargo run -p riedspied-cli -- list --verbose
 ```
 
 See `docs/architecture.md`, `docs/benchmark-methodology.md`, and `docs/platform-notes.md` for implementation details and caveats.

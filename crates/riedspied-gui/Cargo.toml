@@ -7,7 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+directories.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_plot.workspace = true
+rfd.workspace = true
 riedspied-core = { path = "../riedspied-core" }

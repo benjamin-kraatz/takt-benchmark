@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{
@@ -5,7 +6,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use directories::{ProjectDirs, UserDirs};
 use eframe::egui;
+use rfd::FileDialog;
 use riedspied_core::{
     BenchmarkProfile, BenchmarkRunRecord, BenchmarkType, DeviceTarget, ExportFormat, HistoryStore,
     ProfilePreset, ProgressUpdate, RunConfiguration, discover_devices, export_runs_to_path,
@@ -27,8 +30,12 @@ pub struct RiedspiedApp {
     comparison_run_ids: Vec<String>,
     history_device_filter: Option<String>,
     history_profile_filter: Option<ProfilePreset>,
+    selected_export_format: ExportFormat,
+    export_directory: PathBuf,
     export_path: String,
     export_status: Option<String>,
+    picker_receiver: Option<Receiver<Option<PathBuf>>>,
+    picker_pending: bool,
     tag_editor: String,
     note_editor: String,
     worker: Option<WorkerState>,
@@ -45,6 +52,12 @@ enum WorkerEvent {
     Finished(Box<Result<BenchmarkRunRecord, String>>),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ExportControlAction {
+    Browse,
+    Export,
+}
+
 impl Default for RiedspiedApp {
     fn default() -> Self {
         let devices = discover_devices().unwrap_or_default();
@@ -52,6 +65,7 @@ impl Default for RiedspiedApp {
         let history = HistoryStore::default_store()
             .and_then(|store| store.load())
             .unwrap_or_default();
+        let export_directory = load_export_directory().unwrap_or_else(default_export_directory);
 
         Self {
             devices,
@@ -66,8 +80,18 @@ impl Default for RiedspiedApp {
             comparison_run_ids: Vec::new(),
             history_device_filter: None,
             history_profile_filter: None,
-            export_path: "benchmark-export".to_string(),
+            selected_export_format: ExportFormat::Json,
+            export_directory: export_directory.clone(),
+            export_path: export_directory
+                .join(format!(
+                    "benchmark-export.{}",
+                    ExportFormat::Json.extension()
+                ))
+                .display()
+                .to_string(),
             export_status: None,
+            picker_receiver: None,
+            picker_pending: false,
             tag_editor: String::new(),
             note_editor: String::new(),
             worker: None,
@@ -192,6 +216,28 @@ impl RiedspiedApp {
         }
     }
 
+    fn poll_picker(&mut self) {
+        let mut clear_receiver = false;
+        if let Some(receiver) = &self.picker_receiver {
+            while let Ok(path) = receiver.try_recv() {
+                clear_receiver = true;
+                self.picker_pending = false;
+                if let Some(path) = path {
+                    self.export_path = path.display().to_string();
+                    if let Some(parent) = path.parent() {
+                        self.export_directory = parent.to_path_buf();
+                        let _ = save_export_directory(parent);
+                    }
+                    self.export_status = Some(format!("Selected export path {}", path.display()));
+                    self.error_message = None;
+                }
+            }
+        }
+        if clear_receiver {
+            self.picker_receiver = None;
+        }
+    }
+
     fn selected_run(&self) -> Option<&BenchmarkRunRecord> {
         let run_id = self.selected_run_id.as_ref()?;
         self.history.iter().find(|record| &record.run_id == run_id)
@@ -276,14 +322,40 @@ impl RiedspiedApp {
         }
     }
 
+    fn begin_export_picker(&mut self, suggestion: &str) {
+        if self.picker_pending {
+            return;
+        }
+
+        self.picker_pending = true;
+        self.error_message = None;
+        let directory = self.export_directory.clone();
+        let file_name = suggested_file_name(suggestion, self.selected_export_format);
+        let format = self.selected_export_format;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let dialog = FileDialog::new()
+                .set_directory(directory)
+                .set_file_name(&file_name)
+                .add_filter(format.label(), &[format.extension()]);
+            let _ = sender.send(dialog.save_file());
+        });
+        self.picker_receiver = Some(receiver);
+    }
+
     fn export_runs(&mut self, format: ExportFormat, title: &str, runs: &[BenchmarkRunRecord]) {
         if runs.is_empty() {
             self.error_message = Some("No benchmark run is available for export.".to_string());
             return;
         }
-        let output_path = normalize_export_path(&self.export_path, format);
+        let output_path = normalize_export_path(&self.export_path, format, &self.export_directory);
         match export_runs_to_path(format, title, runs, &output_path) {
             Ok(()) => {
+                if let Some(parent) = output_path.parent() {
+                    self.export_directory = parent.to_path_buf();
+                    let _ = save_export_directory(parent);
+                }
+                self.export_path = output_path.display().to_string();
                 self.export_status = Some(format!(
                     "Exported {} run(s) to {}",
                     runs.len(),
@@ -299,6 +371,7 @@ impl RiedspiedApp {
 impl eframe::App for RiedspiedApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_worker();
+        self.poll_picker();
 
         ui.horizontal(|ui| {
             ui.heading("riedspied");
@@ -342,11 +415,23 @@ impl eframe::App for RiedspiedApp {
         if let Some(run) = &self.latest_run {
             ui.separator();
             benchmark::show_run_summary(ui, run);
-            if let Some(format) =
-                render_export_controls(ui, &mut self.export_path, &mut self.export_status)
-            {
-                let runs = vec![run.clone()];
-                self.export_runs(format, "Immediate benchmark export", &runs);
+            match render_export_controls(
+                ui,
+                &mut self.selected_export_format,
+                &mut self.export_path,
+                &mut self.export_status,
+                self.picker_pending,
+            ) {
+                Some(ExportControlAction::Browse) => self.begin_export_picker(&run.display_name()),
+                Some(ExportControlAction::Export) => {
+                    let runs = vec![run.clone()];
+                    self.export_runs(
+                        self.selected_export_format,
+                        "Immediate benchmark export",
+                        &runs,
+                    );
+                }
+                None => {}
             }
         }
 
@@ -374,11 +459,25 @@ impl eframe::App for RiedspiedApp {
             if ui.button("Save tags and notes").clicked() {
                 self.save_annotations();
             }
-            if let Some(format) =
-                render_export_controls(ui, &mut self.export_path, &mut self.export_status)
-            {
-                let runs = vec![selected_run.clone()];
-                self.export_runs(format, "Detailed benchmark export", &runs);
+            match render_export_controls(
+                ui,
+                &mut self.selected_export_format,
+                &mut self.export_path,
+                &mut self.export_status,
+                self.picker_pending,
+            ) {
+                Some(ExportControlAction::Browse) => {
+                    self.begin_export_picker(&selected_run.display_name())
+                }
+                Some(ExportControlAction::Export) => {
+                    let runs = vec![selected_run.clone()];
+                    self.export_runs(
+                        self.selected_export_format,
+                        "Detailed benchmark export",
+                        &runs,
+                    );
+                }
+                None => {}
             }
             ui.separator();
             detail::show_run_detail(ui, &selected_run);
@@ -392,10 +491,18 @@ impl eframe::App for RiedspiedApp {
             ui.separator();
             comparison::show_two_run_comparison(ui, comparison_runs[0], comparison_runs[1]);
             let runs = vec![comparison_runs[0].clone(), comparison_runs[1].clone()];
-            if let Some(format) =
-                render_export_controls(ui, &mut self.export_path, &mut self.export_status)
-            {
-                self.export_runs(format, "Comparison export", &runs);
+            match render_export_controls(
+                ui,
+                &mut self.selected_export_format,
+                &mut self.export_path,
+                &mut self.export_status,
+                self.picker_pending,
+            ) {
+                Some(ExportControlAction::Browse) => self.begin_export_picker("comparison-export"),
+                Some(ExportControlAction::Export) => {
+                    self.export_runs(self.selected_export_format, "Comparison export", &runs);
+                }
+                None => {}
             }
         }
 
@@ -413,46 +520,145 @@ impl eframe::App for RiedspiedApp {
 
 fn render_export_controls(
     ui: &mut egui::Ui,
+    selected_export_format: &mut ExportFormat,
     export_path: &mut String,
     export_status: &mut Option<String>,
-) -> Option<ExportFormat> {
-    let mut requested_export = None;
+    picker_pending: bool,
+) -> Option<ExportControlAction> {
+    let mut action = None;
     ui.horizontal(|ui| {
+        ui.label("Format");
+        egui::ComboBox::from_id_salt(ui.next_auto_id())
+            .selected_text(selected_export_format.label())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    selected_export_format,
+                    ExportFormat::Json,
+                    ExportFormat::Json.label(),
+                );
+                ui.selectable_value(
+                    selected_export_format,
+                    ExportFormat::Markdown,
+                    ExportFormat::Markdown.label(),
+                );
+                ui.selectable_value(
+                    selected_export_format,
+                    ExportFormat::Html,
+                    ExportFormat::Html.label(),
+                );
+                ui.selectable_value(
+                    selected_export_format,
+                    ExportFormat::Png,
+                    ExportFormat::Png.label(),
+                );
+            });
         ui.label("Export path");
         ui.text_edit_singleline(export_path);
     });
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Export JSON").clicked() {
-            requested_export = Some(ExportFormat::Json);
+        if ui
+            .add_enabled(
+                !picker_pending,
+                egui::Button::new(if picker_pending {
+                    "Choosing..."
+                } else {
+                    "Browse..."
+                }),
+            )
+            .clicked()
+        {
+            action = Some(ExportControlAction::Browse);
         }
-        if ui.button("Export Markdown").clicked() {
-            requested_export = Some(ExportFormat::Markdown);
-        }
-        if ui.button("Export HTML").clicked() {
-            requested_export = Some(ExportFormat::Html);
-        }
-        if ui.button("Export PNG").clicked() {
-            requested_export = Some(ExportFormat::Png);
+        if ui
+            .button(format!("Export {}", selected_export_format.label()))
+            .clicked()
+        {
+            action = Some(ExportControlAction::Export);
         }
         if ui.button("Clear status").clicked() {
             *export_status = None;
         }
     });
 
-    requested_export
+    action
 }
 
-fn normalize_export_path(path: &str, format: ExportFormat) -> PathBuf {
-    let mut output = PathBuf::from(path.trim());
+fn normalize_export_path(path: &str, format: ExportFormat, export_directory: &Path) -> PathBuf {
+    let trimmed = path.trim();
+    let mut output = if trimmed.is_empty() {
+        export_directory.join(format!("benchmark-export.{}", format.extension()))
+    } else {
+        PathBuf::from(trimmed)
+    };
     if output.extension().is_none() {
         output.set_extension(format.extension());
     }
-    if output.as_os_str().is_empty() {
-        output = PathBuf::from(format!("benchmark-export.{}", format.extension()));
-    }
     if output.is_relative() {
-        Path::new(".").join(output)
+        export_directory.join(output)
     } else {
         output
     }
+}
+
+fn suggested_file_name(suggestion: &str, format: ExportFormat) -> String {
+    let stem = suggestion
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!(
+        "{}.{}",
+        if stem.is_empty() {
+            "benchmark-export"
+        } else {
+            &stem
+        },
+        format.extension()
+    )
+}
+
+fn default_export_directory() -> PathBuf {
+    if let Some(user_dirs) = UserDirs::new() {
+        if let Some(documents_dir) = user_dirs.document_dir() {
+            return documents_dir.to_path_buf();
+        }
+        return user_dirs.home_dir().to_path_buf();
+    }
+
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn export_settings_path() -> Option<PathBuf> {
+    let project_dirs = ProjectDirs::from("com", "riedspied", "riedspied")?;
+    Some(project_dirs.config_local_dir().join("gui-export-dir.txt"))
+}
+
+fn load_export_directory() -> Option<PathBuf> {
+    let path = export_settings_path()?;
+    let content = fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+fn save_export_directory(directory: &Path) -> std::io::Result<()> {
+    let Some(path) = export_settings_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, directory.display().to_string())
 }
