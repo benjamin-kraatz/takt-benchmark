@@ -5,7 +5,8 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 
 use super::{
-    MountEntry, base_device_name, capture_command, clean_value, hydrate_targets, normalize_bool,
+    MountEntry, base_device_name, build_device_id, capture_command, clean_value, hydrate_targets,
+    normalize_bool,
 };
 
 pub fn discover_devices() -> Result<Vec<super::DeviceTarget>> {
@@ -84,7 +85,10 @@ fn is_supported_mount(entry: &MountEntry) -> bool {
 }
 
 fn enrich_device(device: &mut super::DeviceTarget) {
+    let mut unique_hint = None;
+
     if !device.source.starts_with("/dev/") {
+        device.id = build_device_id(&device.source, &device.mount_point, None, None, None);
         return;
     }
 
@@ -111,12 +115,29 @@ fn enrich_device(device: &mut super::DeviceTarget) {
     device.metadata.model =
         clean_value(merged_property(primary.as_ref(), parent.as_ref(), "MODEL"));
     device.metadata.bus = clean_value(merged_property(primary.as_ref(), parent.as_ref(), "TRAN"));
+    device.metadata.volume_uuid =
+        clean_value(merged_property(primary.as_ref(), parent.as_ref(), "UUID"));
+    device.metadata.partition_uuid = clean_value(merged_property(
+        primary.as_ref(),
+        parent.as_ref(),
+        "PARTUUID",
+    ));
+    unique_hint = clean_value(merged_property(primary.as_ref(), parent.as_ref(), "WWN"))
+        .or_else(|| clean_value(merged_property(primary.as_ref(), parent.as_ref(), "SERIAL")));
 
     if device.metadata.bus.as_deref() == Some("usb") {
         if let Some(base_name) = base_device_name(&device.source) {
             device.metadata.usb_generation = usb_generation_hint(&base_name);
         }
     }
+
+    device.id = build_device_id(
+        &device.source,
+        &device.mount_point,
+        device.metadata.volume_uuid.as_deref(),
+        device.metadata.partition_uuid.as_deref(),
+        unique_hint.as_deref(),
+    );
 }
 
 fn lsblk_properties(device: &str) -> std::collections::HashMap<String, String> {
@@ -125,7 +146,7 @@ fn lsblk_properties(device: &str) -> std::collections::HashMap<String, String> {
         &[
             "-P",
             "-o",
-            "PATH,PKNAME,RM,RO,ROTA,MODEL,VENDOR,TRAN",
+            "PATH,PKNAME,RM,RO,ROTA,MODEL,VENDOR,TRAN,UUID,PARTUUID,WWN,SERIAL",
             device,
         ],
     ) else {

@@ -5,8 +5,8 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use super::{
-    MountEntry, base_device_name, capture_command, clean_value, hydrate_targets, normalize_bool,
-    parse_key_value_lines,
+    MountEntry, base_device_name, build_device_id, capture_command, clean_value, hydrate_targets,
+    normalize_bool, parse_key_value_lines,
 };
 
 pub fn discover_devices() -> Result<Vec<super::DeviceTarget>> {
@@ -108,6 +108,18 @@ fn enrich_device(device: &mut super::DeviceTarget, usb_speed_map: &HashMap<Strin
                 .or_else(|| values.get("Media Name"))
                 .map(String::as_str),
         );
+        device.metadata.volume_uuid = clean_value(
+            values
+                .get("Volume UUID")
+                .or_else(|| values.get("APFS Volume UUID"))
+                .map(String::as_str),
+        );
+        device.metadata.partition_uuid = clean_value(
+            values
+                .get("Disk / Partition UUID")
+                .or_else(|| values.get("Partition UUID"))
+                .map(String::as_str),
+        );
     }
 
     if let Some(base_device) = base_device_name(&device.source) {
@@ -118,6 +130,14 @@ fn enrich_device(device: &mut super::DeviceTarget, usb_speed_map: &HashMap<Strin
             }
         }
     }
+
+    device.id = build_device_id(
+        &device.source,
+        &device.mount_point,
+        device.metadata.volume_uuid.as_deref(),
+        device.metadata.partition_uuid.as_deref(),
+        None,
+    );
 }
 
 fn usb_speed_map() -> HashMap<String, String> {

@@ -64,7 +64,8 @@ pub fn print_device_table(devices: &[riedspied_core::DeviceTarget], verbose: boo
         );
         if verbose {
             println!(
-                "  source={} readonly={} removable={} storage={} bus={} protocol={} model={} vendor={} usb={} mount-options={}",
+                "  id={} source={} readonly={} removable={} storage={} bus={} protocol={} model={} vendor={} usb={} volume-uuid={} partition-uuid={} mount-options={}",
+                device.id,
                 device.source,
                 device.metadata.is_read_only,
                 device
@@ -78,6 +79,8 @@ pub fn print_device_table(devices: &[riedspied_core::DeviceTarget], verbose: boo
                 device.metadata.model.as_deref().unwrap_or("-"),
                 device.metadata.vendor.as_deref().unwrap_or("-"),
                 device.metadata.usb_generation.as_deref().unwrap_or("-"),
+                device.metadata.volume_uuid.as_deref().unwrap_or("-"),
+                device.metadata.partition_uuid.as_deref().unwrap_or("-"),
                 if device.metadata.mount_options.is_empty() {
                     "-".to_string()
                 } else {
@@ -147,8 +150,9 @@ pub fn print_history(records: &[BenchmarkRunRecord], verbose: bool) {
         }
         if verbose {
             println!(
-                "  target={} fs={} readonly={} transport={} model={} vendor={}",
+                "  target={} target-id={} fs={} readonly={} transport={} model={} vendor={}",
                 record.target.mount_point.display(),
+                record.target.id,
                 record.target.filesystem,
                 record.target.metadata.is_read_only,
                 record.target.transport_hint().unwrap_or("unknown"),

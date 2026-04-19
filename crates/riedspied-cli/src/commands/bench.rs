@@ -73,11 +73,7 @@ pub fn find_target(target: &str) -> Result<DeviceTarget> {
 
     devices
         .into_iter()
-        .find(|device| {
-            device.mount_point == target_path
-                || device.id == target
-                || device.name.eq_ignore_ascii_case(target)
-        })
+        .find(|device| device.mount_point == target_path || device.matches_reference(target))
         .with_context(|| format!("no benchmark target matched {target}"))
 }
 
@@ -129,11 +125,7 @@ pub fn load_history(
     let store = HistoryStore::default_store()?;
     let mut records = store.load()?;
     if let Some(target_filter) = target_filter {
-        records.retain(|record| {
-            record.target.name.eq_ignore_ascii_case(target_filter)
-                || record.target.mount_point == Path::new(target_filter)
-                || record.target.id == target_filter
-        });
+        records.retain(|record| record.target.matches_reference(target_filter));
     }
     if let Some(profile_filter) = profile_filter {
         let selected_profile: ProfilePreset = profile_filter.into();

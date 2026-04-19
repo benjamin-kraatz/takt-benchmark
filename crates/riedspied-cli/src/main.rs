@@ -26,7 +26,10 @@ enum Command {
         verbose: bool,
     },
     Bench {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Target name, mount path, source path, or explicit device ID"
+        )]
         target: String,
         #[arg(long, value_enum, default_value_t = ProfileChoice::Balanced)]
         profile: ProfileChoice,
@@ -48,7 +51,10 @@ enum Command {
     History {
         #[arg(long, default_value_t = 10)]
         limit: usize,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Filter by target name, mount path, source path, or explicit device ID"
+        )]
         target: Option<String>,
         #[arg(long, value_enum)]
         profile: Option<ProfileChoice>,

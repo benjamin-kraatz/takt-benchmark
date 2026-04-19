@@ -43,6 +43,8 @@ List discovered benchmark targets:
 cargo run -p riedspied-cli -- list --verbose
 ```
 
+The verbose listing now includes an explicit device ID for each detected target. That ID is intended to be stable across mount-point changes when the platform exposes a volume or partition UUID.
+
 Run a benchmark against a mounted target:
 
 ```bash
@@ -52,6 +54,14 @@ cargo run -p riedspied-cli -- bench \
   --bench sequential-write \
   --bench sustained-write \
   --tag baseline
+```
+
+You can also target a device explicitly by ID instead of by mount path or display name:
+
+```bash
+cargo run -p riedspied-cli -- bench \
+  --target volume-uuid:c4dd4c01-f913-301b-8a1c-701332af5b53 \
+  --profile balanced
 ```
 
 Run a benchmark and export the result immediately:
@@ -68,8 +78,16 @@ Inspect saved history and export previous runs:
 
 ```bash
 cargo run -p riedspied-cli -- history --limit 5 --profile balanced --verbose
+cargo run -p riedspied-cli -- history --target volume-uuid:c4dd4c01-f913-301b-8a1c-701332af5b53 --verbose
 cargo run -p riedspied-cli -- export --latest --format png --output ./latest-chart.png
 ```
+
+For CLI target resolution, `--target` accepts any of the following:
+
+- display name such as `RetroPie`
+- mount path such as `/Volumes/RetroPie`
+- source path such as `/dev/disk19s1`
+- explicit device ID such as `volume-uuid:...`
 
 ### Run the GUI
 
@@ -104,8 +122,11 @@ Mounted devices now include optional metadata gathered from platform tools when 
 - transport or bus hints such as USB or NVMe
 - network protocol hints such as SMB or NFS
 - USB generation hints where the platform exposes them
+- volume UUID and partition UUID hints where the platform exposes them
 
 Missing metadata is treated as optional context, not a fatal error.
+
+Each detected target also has an explicit device ID used by the CLI and GUI selection state. The ID prefers a volume UUID, then a partition UUID, then a device-specific fallback such as the source path.
 
 ## GUI analysis workflow
 

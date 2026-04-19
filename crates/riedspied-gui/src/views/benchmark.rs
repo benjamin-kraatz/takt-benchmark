@@ -101,14 +101,17 @@ pub fn show_controls(
     if let Some(selected_target) = selected_target.as_ref() {
         if let Some(device) = devices.iter().find(|device| &device.id == selected_target) {
             ui.label(format!(
-                "Selected target: {} | readonly={} | transport={} | storage={} | model={} | vendor={} | usb={} | mount options={}",
+                "Selected target: {} | id={} | readonly={} | transport={} | storage={} | model={} | vendor={} | usb={} | volume uuid={} | partition uuid={} | mount options={}",
                 device.mount_point.display(),
+                device.id,
                 device.metadata.is_read_only,
                 device.transport_hint().unwrap_or("unknown"),
                 device.storage_hint().unwrap_or("unknown"),
                 device.metadata.model.as_deref().unwrap_or("-"),
                 device.metadata.vendor.as_deref().unwrap_or("-"),
                 device.metadata.usb_generation.as_deref().unwrap_or("-"),
+                device.metadata.volume_uuid.as_deref().unwrap_or("-"),
+                device.metadata.partition_uuid.as_deref().unwrap_or("-"),
                 if device.metadata.mount_options.is_empty() {
                     "-".to_string()
                 } else {

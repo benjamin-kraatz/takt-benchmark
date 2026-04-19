@@ -38,6 +38,10 @@ pub struct DeviceMetadata {
     pub network_protocol: Option<String>,
     #[serde(default)]
     pub usb_generation: Option<String>,
+    #[serde(default)]
+    pub volume_uuid: Option<String>,
+    #[serde(default)]
+    pub partition_uuid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +80,13 @@ impl DeviceTarget {
             .bus
             .as_deref()
             .or(self.metadata.network_protocol.as_deref())
+    }
+
+    pub fn matches_reference(&self, reference: &str) -> bool {
+        self.id.eq_ignore_ascii_case(reference)
+            || self.name.eq_ignore_ascii_case(reference)
+            || self.source == reference
+            || self.mount_point == Path::new(reference)
     }
 }
 
@@ -186,7 +197,7 @@ pub(crate) fn hydrate_targets(entries: Vec<MountEntry>) -> Result<Vec<DeviceTarg
         if let Some((total_bytes, available_bytes)) = space_map.get(&entry.mount_point) {
             let mount_point = entry.mount_point.clone();
             devices.push(DeviceTarget {
-                id: mount_point.display().to_string(),
+                id: build_device_id(&entry.source, &mount_point, None, None, None),
                 name: device_name(&mount_point, &entry.source),
                 mount_point,
                 source: entry.source.clone(),
@@ -207,6 +218,45 @@ pub(crate) fn hydrate_targets(entries: Vec<MountEntry>) -> Result<Vec<DeviceTarg
     devices.sort_by(|left, right| left.mount_point.cmp(&right.mount_point));
     devices.dedup_by(|left, right| left.mount_point == right.mount_point);
     Ok(devices)
+}
+
+pub(crate) fn build_device_id(
+    source: &str,
+    mount_point: &Path,
+    volume_uuid: Option<&str>,
+    partition_uuid: Option<&str>,
+    unique_hint: Option<&str>,
+) -> String {
+    if let Some(volume_uuid) = normalized_identifier(volume_uuid) {
+        return format!("volume-uuid:{volume_uuid}");
+    }
+
+    if let Some(partition_uuid) = normalized_identifier(partition_uuid) {
+        return format!("partition-uuid:{partition_uuid}");
+    }
+
+    if let Some(unique_hint) = normalized_identifier(unique_hint) {
+        return format!("device-id:{unique_hint}");
+    }
+
+    if source.starts_with("/dev/") {
+        return format!("source:{source}");
+    }
+
+    if source.starts_with("//") || source.contains(":/") {
+        return format!("network:{source}");
+    }
+
+    format!("mount:{}", mount_point.display())
+}
+
+fn normalized_identifier(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_ascii_lowercase())
+    }
 }
 
 pub(crate) fn is_read_only_mount(options: &[String]) -> bool {
@@ -307,7 +357,7 @@ pub(crate) fn base_device_name(source: &str) -> Option<String> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::parse_df_line;
+    use super::{DeviceKind, DeviceMetadata, DeviceTarget, build_device_id, parse_df_line};
 
     #[test]
     fn parses_df_line_with_spaces_in_mount_point() {
@@ -327,5 +377,38 @@ mod tests {
         assert_eq!(parsed.0, PathBuf::from("/Volumes/RetroPie"));
         assert_eq!(parsed.1, 1_986_208);
         assert_eq!(parsed.2, 1_701_472);
+    }
+
+    #[test]
+    fn prefers_uuid_based_device_id_when_available() {
+        let device_id = build_device_id(
+            "/dev/disk19s1",
+            std::path::Path::new("/Volumes/RetroPie"),
+            Some("ABCD-EF12"),
+            Some("ignored-partition-uuid"),
+            Some("ignored-device-id"),
+        );
+
+        assert_eq!(device_id, "volume-uuid:abcd-ef12");
+    }
+
+    #[test]
+    fn device_matches_id_source_mount_and_name() {
+        let device = DeviceTarget {
+            id: "volume-uuid:abcd-ef12".to_string(),
+            name: "RetroPie".to_string(),
+            mount_point: PathBuf::from("/Volumes/RetroPie"),
+            source: "/dev/disk19s1".to_string(),
+            filesystem: "exfat".to_string(),
+            kind: DeviceKind::External,
+            total_bytes: 1024,
+            available_bytes: 512,
+            metadata: DeviceMetadata::default(),
+        };
+
+        assert!(device.matches_reference("volume-uuid:ABCD-EF12"));
+        assert!(device.matches_reference("RetroPie"));
+        assert!(device.matches_reference("/Volumes/RetroPie"));
+        assert!(device.matches_reference("/dev/disk19s1"));
     }
 }
