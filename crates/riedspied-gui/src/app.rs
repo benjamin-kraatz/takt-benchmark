@@ -11,8 +11,8 @@ use eframe::egui;
 use rfd::FileDialog;
 use riedspied_core::{
     BenchmarkProfile, BenchmarkRunRecord, BenchmarkType, DeviceTarget, ExportFormat, HistoryStore,
-    ProfilePreset, ProgressUpdate, RunConfiguration, discover_devices, export_runs_to_path,
-    run_benchmark_suite,
+    ProfilePreset, ProgressUpdate, RunConfiguration, describe_export, discover_devices,
+    export_runs_to_path, run_benchmark_suite,
 };
 
 use crate::views::{benchmark, comparison, detail, history};
@@ -418,8 +418,10 @@ impl eframe::App for RiedspiedApp {
             match render_export_controls(
                 ui,
                 &mut self.selected_export_format,
+                &self.export_directory,
                 &mut self.export_path,
                 &mut self.export_status,
+                std::slice::from_ref(run),
                 self.picker_pending,
             ) {
                 Some(ExportControlAction::Browse) => self.begin_export_picker(&run.display_name()),
@@ -462,8 +464,10 @@ impl eframe::App for RiedspiedApp {
             match render_export_controls(
                 ui,
                 &mut self.selected_export_format,
+                &self.export_directory,
                 &mut self.export_path,
                 &mut self.export_status,
+                std::slice::from_ref(&selected_run),
                 self.picker_pending,
             ) {
                 Some(ExportControlAction::Browse) => {
@@ -494,8 +498,10 @@ impl eframe::App for RiedspiedApp {
             match render_export_controls(
                 ui,
                 &mut self.selected_export_format,
+                &self.export_directory,
                 &mut self.export_path,
                 &mut self.export_status,
+                &runs,
                 self.picker_pending,
             ) {
                 Some(ExportControlAction::Browse) => self.begin_export_picker("comparison-export"),
@@ -521,11 +527,16 @@ impl eframe::App for RiedspiedApp {
 fn render_export_controls(
     ui: &mut egui::Ui,
     selected_export_format: &mut ExportFormat,
+    export_directory: &Path,
     export_path: &mut String,
     export_status: &mut Option<String>,
+    runs: &[BenchmarkRunRecord],
     picker_pending: bool,
 ) -> Option<ExportControlAction> {
     let mut action = None;
+    let preview = describe_export(*selected_export_format, runs);
+    let normalized_path =
+        normalize_export_path(export_path, *selected_export_format, export_directory);
     ui.horizontal(|ui| {
         ui.label("Format");
         egui::ComboBox::from_id_salt(ui.next_auto_id())
@@ -554,6 +565,33 @@ fn render_export_controls(
             });
         ui.label("Export path");
         ui.text_edit_singleline(export_path);
+    });
+    ui.group(|ui| {
+        ui.strong("Export Preview");
+        ui.label(format!(
+            "{} run(s) will be exported as {}.",
+            preview.run_count,
+            preview.format.label()
+        ));
+        ui.label(format!("Destination: {}", normalized_path.display()));
+        if let Some(mode) = preview.png_mode {
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                ui.label("PNG mode:");
+                ui.strong(mode.label());
+            });
+            ui.label(mode.description());
+        } else {
+            ui.separator();
+            ui.label("Text exports include benchmark metrics, annotations, and device context. PNG-specific layout selection is only used when PNG is chosen.");
+        }
+        if let Some(first_run) = runs.first() {
+            let mut run_summary = vec![first_run.display_name()];
+            if runs.len() > 1 {
+                run_summary.push(format!("+ {} more run(s)", runs.len() - 1));
+            }
+            ui.label(format!("Selection: {}", run_summary.join(" ")));
+        }
     });
     ui.horizontal_wrapped(|ui| {
         if ui

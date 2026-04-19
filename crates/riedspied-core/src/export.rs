@@ -38,6 +38,52 @@ impl ExportFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PngExportMode {
+    SingleRun,
+    Comparison,
+    Trend,
+}
+
+impl PngExportMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            PngExportMode::SingleRun => "Single-run detail",
+            PngExportMode::Comparison => "Direct comparison",
+            PngExportMode::Trend => "Same-device trend",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            PngExportMode::SingleRun => {
+                "Exports a 2x2 grid with one panel per benchmark and a dedicated time-series chart in each panel."
+            }
+            PngExportMode::Comparison => {
+                "Exports per-benchmark overlay panels so multiple runs can be compared directly in the same chart."
+            }
+            PngExportMode::Trend => {
+                "Exports per-benchmark trend panels that track average throughput across multiple same-device runs over time."
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportPreview {
+    pub format: ExportFormat,
+    pub run_count: usize,
+    pub png_mode: Option<PngExportMode>,
+}
+
+pub fn describe_export(format: ExportFormat, runs: &[BenchmarkRunRecord]) -> ExportPreview {
+    ExportPreview {
+        format,
+        run_count: runs.len(),
+        png_mode: (format == ExportFormat::Png).then(|| png_report_mode(runs)),
+    }
+}
+
 pub fn export_runs_to_string(
     format: ExportFormat,
     title: &str,
@@ -197,29 +243,22 @@ fn render_png_chart(title: &str, runs: &[BenchmarkRunRecord], path: &Path) -> Re
     render_png_header(&header_area, title, runs, mode)?;
 
     match mode {
-        PngReportMode::SingleRun => render_single_run_panels(&content_area, &runs[0])?,
-        PngReportMode::Comparison => render_comparison_panels(&content_area, runs)?,
-        PngReportMode::Trend => render_trend_panels(&content_area, runs)?,
+        PngExportMode::SingleRun => render_single_run_panels(&content_area, &runs[0])?,
+        PngExportMode::Comparison => render_comparison_panels(&content_area, runs)?,
+        PngExportMode::Trend => render_trend_panels(&content_area, runs)?,
     }
 
     root.present().context("failed to finalize PNG export")?;
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PngReportMode {
-    SingleRun,
-    Comparison,
-    Trend,
-}
-
-fn png_report_mode(runs: &[BenchmarkRunRecord]) -> PngReportMode {
+fn png_report_mode(runs: &[BenchmarkRunRecord]) -> PngExportMode {
     if runs.len() == 1 {
-        PngReportMode::SingleRun
+        PngExportMode::SingleRun
     } else if runs.len() >= 3 && same_device_runs(runs) {
-        PngReportMode::Trend
+        PngExportMode::Trend
     } else {
-        PngReportMode::Comparison
+        PngExportMode::Comparison
     }
 }
 
@@ -233,7 +272,7 @@ fn render_png_header(
     area: &DrawingArea<BitMapBackend<'_>, Shift>,
     title: &str,
     runs: &[BenchmarkRunRecord],
-    mode: PngReportMode,
+    mode: PngExportMode,
 ) -> Result<()> {
     area.fill(&RGBColor(245, 242, 235))?;
     area.draw(&Text::new(
@@ -248,9 +287,9 @@ fn render_png_header(
     ))?;
 
     let mode_label = match mode {
-        PngReportMode::SingleRun => "Single-run detail report",
-        PngReportMode::Comparison => "Direct comparison report",
-        PngReportMode::Trend => "Same-device trend report",
+        PngExportMode::SingleRun => "Single-run detail report",
+        PngExportMode::Comparison => "Direct comparison report",
+        PngExportMode::Trend => "Same-device trend report",
     };
     area.draw(&Text::new(
         mode_label.to_string(),
@@ -587,7 +626,9 @@ fn downsample_samples(samples: &[SamplePoint], max_points: usize) -> Vec<SampleP
 mod tests {
     use tempfile::tempdir;
 
-    use super::{ExportFormat, export_runs_to_path, export_runs_to_string};
+    use super::{
+        ExportFormat, PngExportMode, describe_export, export_runs_to_path, export_runs_to_string,
+    };
     use crate::bench::{
         BenchmarkProfile, BenchmarkResult, BenchmarkRunRecord, BenchmarkType, SamplePoint,
     };
@@ -671,6 +712,27 @@ mod tests {
         assert!(json.contains("run-123"));
         assert!(markdown.contains("# export"));
         assert!(html.contains("<!doctype html>"));
+    }
+
+    #[test]
+    fn describes_png_export_modes() {
+        let single = describe_export(ExportFormat::Png, &[sample_run()]);
+        let comparison = describe_export(
+            ExportFormat::Png,
+            &[sample_run_with_index(0), sample_run_with_index(1)],
+        );
+        let trend = describe_export(
+            ExportFormat::Png,
+            &[
+                sample_run_with_index(0),
+                sample_run_with_index(1),
+                sample_run_with_index(2),
+            ],
+        );
+
+        assert_eq!(single.png_mode, Some(PngExportMode::SingleRun));
+        assert_eq!(comparison.png_mode, Some(PngExportMode::Comparison));
+        assert_eq!(trend.png_mode, Some(PngExportMode::Trend));
     }
 
     #[test]
