@@ -1,0 +1,13 @@
+[package]
+name = "riedspied-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_plot.workspace = true
+riedspied-core = { path = "../riedspied-core" }

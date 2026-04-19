@@ -1,0 +1,49 @@
+# Architecture
+
+riedspied is structured as a Cargo workspace so both front ends consume the same core benchmark engine and result model.
+
+## Crates
+
+### `riedspied-core`
+
+The core crate owns:
+
+- mounted-device discovery for macOS and Linux
+- benchmark profile presets
+- benchmark execution and progress events
+- local history persistence as JSONL
+
+The benchmark runner creates a dedicated temporary directory on the selected target and executes the requested benchmark suite inside that directory. Progress is streamed through a callback that both the CLI and GUI consume.
+
+### `riedspied-cli`
+
+The CLI is intentionally thin. It only:
+
+- resolves a target from discovered devices
+- constructs the selected profile and benchmark list
+- renders progress and summary output
+- saves completed runs into the history store
+
+### `riedspied-gui`
+
+The GUI runs the same benchmark suite inside a background thread. Progress events are sent through an `mpsc` channel into the UI state, where they drive the live throughput chart and current-phase display.
+
+## Execution flow
+
+1. Discover mounted benchmark targets.
+2. Validate free space against the selected profile.
+3. Create a temporary hidden benchmark directory on the target.
+4. Run sequential write, sequential read, sustained write, and random IOPS benchmarks.
+5. Emit progress updates with current throughput and elapsed time.
+6. Save the completed run to the local history store.
+7. Remove temporary files unless the caller explicitly requests they be retained.
+
+## Why mounted filesystems first
+
+Mounted filesystems give the project a safe v1 boundary:
+
+- no root privileges are required for normal usage
+- the same path-based I/O model works for internal disks, removable media, and mounted NAS shares
+- CLI and GUI can share one execution backend without transport-specific adapters
+
+MTP/PTP and raw-device benchmarking should stay separate backends because they do not follow normal filesystem semantics.
