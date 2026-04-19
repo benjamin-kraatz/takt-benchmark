@@ -1,5 +1,5 @@
 use indicatif::{ProgressBar, ProgressStyle};
-use riedspied_core::{BenchmarkRunRecord, BenchmarkType, ProgressUpdate};
+use takt_core::{BenchmarkRunRecord, BenchmarkType, ProgressUpdate};
 
 pub struct TerminalReporter {
     progress_bar: ProgressBar,
@@ -51,7 +51,7 @@ impl TerminalReporter {
     }
 }
 
-pub fn print_device_table(devices: &[riedspied_core::DeviceTarget], verbose: bool) {
+pub fn print_device_table(devices: &[takt_core::DeviceTarget], verbose: bool) {
     for device in devices {
         println!(
             "{:<20} {:<12} {:<12} {:>8} GiB free {:>8} GiB total {}",

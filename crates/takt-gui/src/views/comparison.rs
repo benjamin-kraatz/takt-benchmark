@@ -1,6 +1,6 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
-use riedspied_core::{BenchmarkRunRecord, BenchmarkType};
+use takt_core::{BenchmarkRunRecord, BenchmarkType};
 
 pub fn show_trend_view(ui: &mut egui::Ui, runs: &[BenchmarkRunRecord]) {
     ui.heading("Device Trend");

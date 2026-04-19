@@ -3093,44 +3093,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "riedspied-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "indicatif",
- "riedspied-core",
-]
-
-[[package]]
-name = "riedspied-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "directories",
- "html-escape",
- "plotters",
- "rand",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "riedspied-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "directories",
- "eframe",
- "egui",
- "egui_plot",
- "rfd",
- "riedspied-core",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3483,6 +3445,44 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "takt-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "indicatif",
+ "takt-core",
+]
+
+[[package]]
+name = "takt-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "directories",
+ "html-escape",
+ "plotters",
+ "rand",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "takt-gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "eframe",
+ "egui",
+ "egui_plot",
+ "rfd",
+ "takt-core",
 ]
 
 [[package]]

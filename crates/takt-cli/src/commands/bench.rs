@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use riedspied_core::{
+use takt_core::{
     BenchmarkProfile, BenchmarkRunRecord, BenchmarkType, DeviceTarget, ExportFormat, HistoryStore,
     ProfilePreset, RunConfiguration, discover_devices, export_runs_to_path, run_benchmark_suite,
 };

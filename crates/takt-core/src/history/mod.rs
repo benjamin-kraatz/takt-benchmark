@@ -18,7 +18,7 @@ impl HistoryStore {
     }
 
     pub fn default_path() -> Result<PathBuf> {
-        let project_dirs = ProjectDirs::from("com", "riedspied", "riedspied")
+        let project_dirs = ProjectDirs::from("com", "takt", "takt")
             .context("failed to resolve application data directory")?;
         Ok(project_dirs.data_local_dir().join("history.jsonl"))
     }

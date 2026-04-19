@@ -1,5 +1,5 @@
 use eframe::egui;
-use riedspied_core::{BenchmarkRunRecord, ProfilePreset};
+use takt_core::{BenchmarkRunRecord, ProfilePreset};
 
 pub fn show_history(
     ui: &mut egui::Ui,

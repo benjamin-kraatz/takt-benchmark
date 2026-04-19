@@ -1,10 +1,10 @@
 # Architecture
 
-riedspied is structured as a Cargo workspace so both front ends consume the same core benchmark engine and result model.
+Takt is structured as a Cargo workspace so both front ends consume the same core benchmark engine and result model.
 
 ## Crates
 
-### `riedspied-core`
+### `takt-core`
 
 The core crate owns:
 
@@ -21,7 +21,7 @@ The core crate also owns the shared export pipeline so JSON, Markdown, HTML, and
 
 PNG export is now layout-aware inside the core export module. It chooses between single-run detail panels, two-run overlay panels, and same-device trend panels based on the export set, so report rendering does not need to be reimplemented in the GUI.
 
-### `riedspied-cli`
+### `takt-cli`
 
 The CLI is intentionally thin. It only:
 
@@ -33,7 +33,7 @@ The CLI is intentionally thin. It only:
 
 CLI target resolution accepts device name, mount path, source path, or explicit device ID. The list command exposes those IDs in verbose mode so users can reference a specific volume directly.
 
-### `riedspied-gui`
+### `takt-gui`
 
 The GUI runs the same benchmark suite inside a background thread. Progress events are sent through an `mpsc` channel into the UI state, where they drive the live throughput chart and current-phase display.
 

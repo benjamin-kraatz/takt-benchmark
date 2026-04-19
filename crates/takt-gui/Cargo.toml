@@ -1,5 +1,5 @@
 [package]
-name = "riedspied-gui"
+name = "takt-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,4 +12,4 @@ eframe.workspace = true
 egui.workspace = true
 egui_plot.workspace = true
 rfd.workspace = true
-riedspied-core = { path = "../riedspied-core" }
+takt-core = { path = "../takt-core" }

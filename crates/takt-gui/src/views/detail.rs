@@ -1,6 +1,6 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
-use riedspied_core::{BenchmarkRunRecord, BenchmarkType};
+use takt_core::{BenchmarkRunRecord, BenchmarkType};
 
 pub fn show_run_detail(ui: &mut egui::Ui, run: &BenchmarkRunRecord) {
     ui.heading("Run Details");

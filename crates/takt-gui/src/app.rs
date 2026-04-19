@@ -9,7 +9,7 @@ use std::sync::{
 use directories::{ProjectDirs, UserDirs};
 use eframe::egui;
 use rfd::FileDialog;
-use riedspied_core::{
+use takt_core::{
     BenchmarkProfile, BenchmarkRunRecord, BenchmarkType, DeviceTarget, ExportFormat, HistoryStore,
     ProfilePreset, ProgressUpdate, RunConfiguration, describe_export, discover_devices,
     export_runs_to_path, run_benchmark_suite,
@@ -17,7 +17,7 @@ use riedspied_core::{
 
 use crate::views::{benchmark, comparison, detail, history};
 
-pub struct RiedspiedApp {
+pub struct TaktApp {
     devices: Vec<DeviceTarget>,
     selected_target: Option<String>,
     profile: ProfilePreset,
@@ -58,7 +58,7 @@ enum ExportControlAction {
     Export,
 }
 
-impl Default for RiedspiedApp {
+impl Default for TaktApp {
     fn default() -> Self {
         let devices = discover_devices().unwrap_or_default();
         let selected_target = devices.first().map(|device| device.id.clone());
@@ -100,7 +100,7 @@ impl Default for RiedspiedApp {
     }
 }
 
-impl RiedspiedApp {
+impl TaktApp {
     pub fn new(_creation_context: &eframe::CreationContext<'_>) -> Self {
         Self::default()
     }
@@ -368,13 +368,13 @@ impl RiedspiedApp {
     }
 }
 
-impl eframe::App for RiedspiedApp {
+impl eframe::App for TaktApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_worker();
         self.poll_picker();
 
         ui.horizontal(|ui| {
-            ui.heading("riedspied");
+            ui.heading("Takt");
             if ui.button("Refresh Devices").clicked() {
                 self.refresh_devices();
             }
@@ -676,7 +676,7 @@ fn default_export_directory() -> PathBuf {
 }
 
 fn export_settings_path() -> Option<PathBuf> {
-    let project_dirs = ProjectDirs::from("com", "riedspied", "riedspied")?;
+    let project_dirs = ProjectDirs::from("com", "takt", "takt")?;
     Some(project_dirs.config_local_dir().join("gui-export-dir.txt"))
 }
 

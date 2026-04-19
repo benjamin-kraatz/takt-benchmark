@@ -1,8 +1,6 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
-use riedspied_core::{
-    BenchmarkRunRecord, BenchmarkType, DeviceTarget, ProfilePreset, ProgressUpdate,
-};
+use takt_core::{BenchmarkRunRecord, BenchmarkType, DeviceTarget, ProfilePreset, ProgressUpdate};
 
 pub fn show_controls(
     ui: &mut egui::Ui,

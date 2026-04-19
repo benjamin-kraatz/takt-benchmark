@@ -10,10 +10,7 @@ use commands::bench::{
 use output::{print_device_table, print_export_notice, print_history, print_run_summary};
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "riedspied",
-    about = "Benchmark mounted devices and storage volumes"
-)]
+#[command(name = "takt", about = "Benchmark mounted devices and storage volumes")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -107,7 +104,7 @@ fn main() -> Result<()> {
                 let Some(export_path) = export_path else {
                     anyhow::bail!("--export-path is required when --export-format is used");
                 };
-                riedspied_core::export_runs_to_path(
+                takt_core::export_runs_to_path(
                     export_format.into(),
                     export_title
                         .as_deref()

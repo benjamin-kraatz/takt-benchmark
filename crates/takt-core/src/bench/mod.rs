@@ -307,7 +307,7 @@ pub fn run_benchmark_suite(
     let started_at = Utc::now();
     let temp_dir = target
         .mount_point
-        .join(format!(".riedspied-{}", started_at.format("%Y%m%d%H%M%S")));
+        .join(format!(".takt-{}", started_at.format("%Y%m%d%H%M%S")));
     fs::create_dir_all(&temp_dir)
         .with_context(|| format!("failed to create temp dir {}", temp_dir.display()))?;
 

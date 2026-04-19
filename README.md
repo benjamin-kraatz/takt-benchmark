@@ -1,54 +1,47 @@
-# riedspied
+# Takt
 
-riedspied is a Rust workspace for benchmarking mounted storage targets on macOS and Linux. It currently supports built-in system volumes, removable drives, SD cards, and mounted network shares that appear as normal filesystems.
+**Takt** is a Rust workspace for benchmarking **mounted filesystems** on **macOS** and **Linux**: internal volumes, removable drives, SD cards, and network shares that appear as normal paths.
 
-## Workspace
+The name *Takt* (German for beat or clock cycle) nods to processor **clocking**—here applied to **storage throughput and latency** on a chosen mount.
 
-- `crates/riedspied-core`: shared benchmark engine, device discovery, and local history persistence.
-- `crates/riedspied-cli`: command-line interface for listing targets, running benchmarks, and inspecting local history.
-- `crates/riedspied-gui`: native desktop application built with `eframe` and `egui`.
+## Crates
 
-## Current v1 capabilities
+| Crate | Role |
+|--------|------|
+| [`crates/takt-core`](crates/takt-core) | Benchmark engine, device discovery, history store, shared export (JSON, Markdown, HTML, PNG) |
+| [`crates/takt-cli`](crates/takt-cli) | Command-line interface |
+| [`crates/takt-gui`](crates/takt-gui) | Native desktop app (`eframe` / `egui`) |
 
-- Sequential write throughput.
-- Sequential read throughput.
-- Sustained write throughput.
-- Random small-block latency and IOPS.
-- Local JSONL history store.
-- macOS and Linux mounted-filesystem discovery.
-- Benchmark subset selection in the CLI and GUI.
-- JSON, Markdown, HTML, and PNG export.
-- Native GUI save-file picker with remembered export directory.
-- GUI history filtering, per-run detail views, direct comparison, and same-device trend charts.
-- Richer device metadata such as read-only hints, removable hints, transport hints, vendor or model when available, and network protocol hints.
+## Features
 
-## Deferred from v1
+- Sequential read/write and sustained write throughput
+- Random small-block IOPS and latency (p50 / p95)
+- Profiles: `quick`, `balanced`, `thorough`
+- Per-run tagging and local JSONL history
+- CLI and GUI benchmark subset selection
+- Exports: JSON, Markdown, HTML, PNG (layout-aware reports)
+- GUI: history filters, per-run detail, two-run comparison, same-device trends, annotations, native save dialog with remembered export folder
+- Device discovery with stable **device IDs** (volume UUID when available), verbose metadata (read-only, removable, transport, vendor/model, network protocol hints, etc.)
 
-- MTP/PTP phone and camera transport.
-- Raw block-device benchmarking.
-- Windows support.
-- Cross-machine result synchronization.
+See [`docs/architecture.md`](docs/architecture.md), [`docs/benchmark-methodology.md`](docs/benchmark-methodology.md), and [`docs/platform-notes.md`](docs/platform-notes.md) for design and caveats.
 
-## Running the Apps
+## Requirements
 
-Build and run commands are executed from the workspace root.
+- **Rust** toolchain matching `rust-version` in the root [`Cargo.toml`](Cargo.toml) (currently **1.85+**)
+- **macOS** or **Linux** (Windows is not supported yet)
 
-### Run the CLI
+## Build and run
 
-Use the CLI when you want scripted runs, terminal output, or direct export from the command line.
+From the repository root:
 
-List discovered benchmark targets:
+### CLI (`takt`)
 
 ```bash
-cargo run -p riedspied-cli -- list --verbose
+cargo run -p takt-cli -- list --verbose
 ```
 
-The verbose listing now includes an explicit device ID for each detected target. That ID is intended to be stable across mount-point changes when the platform exposes a volume or partition UUID.
-
-Run a benchmark against a mounted target:
-
 ```bash
-cargo run -p riedspied-cli -- bench \
+cargo run -p takt-cli -- bench \
   --target /Volumes/MyDrive \
   --profile balanced \
   --bench sequential-write \
@@ -56,104 +49,61 @@ cargo run -p riedspied-cli -- bench \
   --tag baseline
 ```
 
-You can also target a device explicitly by ID instead of by mount path or display name:
+Target by stable device ID:
 
 ```bash
-cargo run -p riedspied-cli -- bench \
+cargo run -p takt-cli -- bench \
   --target volume-uuid:c4dd4c01-f913-301b-8a1c-701332af5b53 \
   --profile balanced
 ```
 
-Run a benchmark and export the result immediately:
+Bench with immediate HTML export:
 
 ```bash
-cargo run -p riedspied-cli -- bench \
+cargo run -p takt-cli -- bench \
   --target /Volumes/MyDrive \
   --profile balanced \
   --export-format html \
   --export-path ./latest-report.html
 ```
 
-Inspect saved history and export previous runs:
+History and export:
 
 ```bash
-cargo run -p riedspied-cli -- history --limit 5 --profile balanced --verbose
-cargo run -p riedspied-cli -- history --target volume-uuid:c4dd4c01-f913-301b-8a1c-701332af5b53 --verbose
-cargo run -p riedspied-cli -- export --latest --format png --output ./latest-chart.png
+cargo run -p takt-cli -- history --limit 5 --profile balanced --verbose
+cargo run -p takt-cli -- history --target volume-uuid:c4dd4c01-f913-301b-8a1c-701332af5b53 --verbose
+cargo run -p takt-cli -- export --latest --format png --output ./latest-chart.png
 ```
 
-For CLI target resolution, `--target` accepts any of the following:
+`--target` accepts a display name, mount path, source device path, or `volume-uuid:…` / similar **device ID** strings printed by `list --verbose`.
 
-- display name such as `RetroPie`
-- mount path such as `/Volumes/RetroPie`
-- source path such as `/dev/disk19s1`
-- explicit device ID such as `volume-uuid:...`
-
-### Run the GUI
-
-Use the GUI when you want interactive target selection, live progress, history filtering, comparison views, annotations, and export previews.
-
-Start the desktop app:
+### GUI
 
 ```bash
-cargo run -p riedspied-gui
+cargo run -p takt-gui
 ```
-
-Inside the GUI you can:
-
-- select a mounted target and benchmark profile
-- choose which benchmarks to run
-- inspect the latest run and saved history
-- compare two runs or review same-device trends
-- export runs with the built-in preview panel and native save dialog
 
 ## Safety model
 
-The benchmark engine writes temporary files into a hidden `.riedspied-*` directory inside the selected mount point. Files are deleted after a run unless `--keep-temp-files` is used in the CLI. The engine refuses to start when the target does not meet the configured free-space requirement for the selected profile.
+Benchmarks write under a hidden **`.takt-<timestamp>`** directory on the **selected mount**. That directory is removed after a successful run unless **`--keep-temp-files`** is set in the CLI. Runs are blocked if free space is below the requirement for the chosen profile.
 
-## Device metadata
+## Migrating local history
 
-Mounted devices now include optional metadata gathered from platform tools when available:
+If you previously ran an older build that stored history under another application ID, history lives under a different user data path. Renaming or copying JSONL data into Takt’s new directory is possible but manual; most users can start fresh.
 
-- read-only mount status and mount options
-- removable vs fixed hints
-- SSD or HDD rotational hints
-- vendor and model names where discoverable
-- transport or bus hints such as USB or NVMe
-- network protocol hints such as SMB or NFS
-- USB generation hints where the platform exposes them
-- volume UUID and partition UUID hints where the platform exposes them
-
-Missing metadata is treated as optional context, not a fatal error.
-
-Each detected target also has an explicit device ID used by the CLI and GUI selection state. The ID prefers a volume UUID, then a partition UUID, then a device-specific fallback such as the source path.
-
-## GUI analysis workflow
-
-The GUI now supports:
-
-- selecting benchmark subsets before a run
-- exporting the latest run or selected history runs
-- browsing for export destinations with a native save dialog and remembered folder
-- filtering history by device and profile
-- opening a detailed run view with overview and drill-down charts
-- comparing two runs directly
-- viewing same-device trends over time
-- tagging and annotating saved runs
-
-PNG exports now render as richer report images instead of a single benchmark summary line:
-
-- single-run exports use a 2x2 benchmark panel layout
-- two-run exports use per-benchmark overlay panels
-- same-device multi-run exports automatically switch to trend-style panels
-
-## Verification
+## Development
 
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets
 cargo test --workspace
-cargo run -p riedspied-cli -- list --verbose
+cargo run -p takt-cli -- list --verbose
 ```
 
-See `docs/architecture.md`, `docs/benchmark-methodology.md`, and `docs/platform-notes.md` for implementation details and caveats.
+## Contributing
+
+Issues and pull requests are welcome. Please run `fmt`, `clippy`, and `test` before submitting.
+
+## License
+
+Licensed under the **Apache License, Version 2.0**. See [`LICENSE`](LICENSE). Attribution and dependency notes are in [`NOTICE`](NOTICE).

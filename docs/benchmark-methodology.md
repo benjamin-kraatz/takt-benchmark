@@ -2,7 +2,7 @@
 
 ## Profiles
 
-riedspied currently ships with three benchmark presets:
+Takt currently ships with three benchmark presets:
 
 - `quick`: 128 MiB sequential pass, 10 second sustained write, 64 MiB random file, 2,000 random operations
 - `balanced`: 512 MiB sequential pass, 20 second sustained write, 128 MiB random file, 5,000 random operations
@@ -24,7 +24,7 @@ Random IOPS uses a fixed-size scratch file, seeks to random block offsets, and p
 
 ## Cleanup
 
-Each benchmark run uses a hidden `.riedspied-*` directory on the target. The directory is removed after completion unless the caller explicitly requests retention.
+Each benchmark run uses a hidden `.takt-*` directory on the target. The directory is removed after completion unless the caller explicitly requests retention.
 
 ## Benchmark selection
 
