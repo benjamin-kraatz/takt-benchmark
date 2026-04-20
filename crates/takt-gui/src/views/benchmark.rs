@@ -1,6 +1,30 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
-use takt_core::{BenchmarkRunRecord, BenchmarkType, DeviceTarget, ProfilePreset, ProgressUpdate};
+use takt_core::{BenchmarkRunRecord, BenchmarkType, DeviceTarget, ProfilePreset};
+
+pub struct RunProgressDisplay {
+    pub status_line: String,
+    pub detail_line: String,
+    pub suite_label: String,
+    pub suite_fraction: f32,
+    pub benchmark_label: String,
+    pub benchmark_fraction: Option<f32>,
+    pub queue_line: Option<String>,
+    pub cancelling: bool,
+}
+
+pub struct RunStatusBanner<'a> {
+    pub kind: RunStatusKind,
+    pub title: &'a str,
+    pub detail: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub enum RunStatusKind {
+    Success,
+    Warning,
+    Error,
+}
 
 pub fn show_controls(
     ui: &mut egui::Ui,
@@ -8,79 +32,138 @@ pub fn show_controls(
     selected_target: &mut Option<String>,
     profile: &mut ProfilePreset,
     selected_benchmarks: &mut Vec<BenchmarkType>,
-    last_progress: Option<&ProgressUpdate>,
+    controls_enabled: bool,
+    progress_display: Option<&RunProgressDisplay>,
+    status_banner: Option<RunStatusBanner<'_>>,
     live_samples: &[[f64; 2]],
 ) {
     ui.heading("Benchmark Runner");
-    ui.horizontal(|ui| {
-        ui.label("Target");
-        egui::ComboBox::from_id_salt("target-combo")
-            .selected_text(selected_label(devices, selected_target.as_ref()))
-            .show_ui(ui, |ui| {
-                for device in devices {
+    ui.add_enabled_ui(controls_enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Target");
+            egui::ComboBox::from_id_salt("target-combo")
+                .selected_text(selected_label(devices, selected_target.as_ref()))
+                .show_ui(ui, |ui| {
+                    for device in devices {
+                        ui.selectable_value(
+                            selected_target,
+                            Some(device.id.clone()),
+                            format!(
+                                "{} ({:?}, {}, {} GiB free)",
+                                device.name,
+                                device.kind,
+                                device.mount_point.display(),
+                                device.available_bytes / 1024 / 1024 / 1024,
+                            ),
+                        );
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Profile");
+            egui::ComboBox::from_id_salt("profile-combo")
+                .selected_text(profile.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(profile, ProfilePreset::Quick, ProfilePreset::Quick.label());
                     ui.selectable_value(
-                        selected_target,
-                        Some(device.id.clone()),
-                        format!(
-                            "{} ({:?}, {}, {} GiB free)",
-                            device.name,
-                            device.kind,
-                            device.mount_point.display(),
-                            device.available_bytes / 1024 / 1024 / 1024,
-                        ),
+                        profile,
+                        ProfilePreset::Balanced,
+                        ProfilePreset::Balanced.label(),
                     );
-                }
-            });
-    });
+                    ui.selectable_value(
+                        profile,
+                        ProfilePreset::Thorough,
+                        ProfilePreset::Thorough.label(),
+                    );
+                });
+        });
 
-    ui.horizontal(|ui| {
-        ui.label("Profile");
-        egui::ComboBox::from_id_salt("profile-combo")
-            .selected_text(profile.label())
-            .show_ui(ui, |ui| {
-                ui.selectable_value(profile, ProfilePreset::Quick, ProfilePreset::Quick.label());
-                ui.selectable_value(
-                    profile,
-                    ProfilePreset::Balanced,
-                    ProfilePreset::Balanced.label(),
-                );
-                ui.selectable_value(
-                    profile,
-                    ProfilePreset::Thorough,
-                    ProfilePreset::Thorough.label(),
-                );
-            });
-    });
-
-    ui.label("Benchmarks");
-    ui.horizontal_wrapped(|ui| {
-        for benchmark in BenchmarkType::ALL {
-            let mut enabled = selected_benchmarks.contains(&benchmark);
-            if ui.checkbox(&mut enabled, benchmark.label()).changed() {
-                if enabled {
-                    selected_benchmarks.push(benchmark);
-                    selected_benchmarks.sort_by_key(|candidate| {
-                        BenchmarkType::ALL
-                            .iter()
-                            .position(|item| item == candidate)
-                            .unwrap_or_default()
-                    });
-                    selected_benchmarks.dedup();
-                } else {
-                    selected_benchmarks.retain(|candidate| candidate != &benchmark);
+        ui.label("Benchmarks");
+        ui.horizontal_wrapped(|ui| {
+            for benchmark in BenchmarkType::ALL {
+                let mut enabled = selected_benchmarks.contains(&benchmark);
+                if ui.checkbox(&mut enabled, benchmark.label()).changed() {
+                    if enabled {
+                        selected_benchmarks.push(benchmark);
+                        selected_benchmarks.sort_by_key(|candidate| {
+                            BenchmarkType::ALL
+                                .iter()
+                                .position(|item| item == candidate)
+                                .unwrap_or_default()
+                        });
+                        selected_benchmarks.dedup();
+                    } else {
+                        selected_benchmarks.retain(|candidate| candidate != &benchmark);
+                    }
                 }
             }
-        }
+        });
     });
 
-    if let Some(progress) = last_progress {
-        ui.label(format!(
-            "Current phase: {} {} {:.1} MiB/s after {:.1}s",
-            progress.benchmark.label(),
-            progress.phase,
-            progress.current_mbps,
-            progress.elapsed.as_secs_f64(),
-        ));
+    if let Some(progress) = progress_display {
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.strong(if progress.cancelling {
+                    "Cancelling benchmark..."
+                } else {
+                    "Benchmark in progress"
+                });
+                if progress.benchmark_fraction.is_none() {
+                    ui.add(egui::Spinner::new());
+                }
+            });
+            ui.label(&progress.status_line);
+            ui.label(&progress.detail_line);
+            ui.add(
+                egui::ProgressBar::new(progress.suite_fraction)
+                    .desired_width(f32::INFINITY)
+                    .text(progress.suite_label.clone()),
+            );
+            if let Some(fraction) = progress.benchmark_fraction {
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .desired_width(f32::INFINITY)
+                        .text(progress.benchmark_label.clone()),
+                );
+            } else {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(&progress.benchmark_label);
+                });
+            }
+            if let Some(queue_line) = &progress.queue_line {
+                ui.label(queue_line);
+            }
+        });
+    } else if !controls_enabled {
+        ui.group(|ui| {
+            ui.strong("Benchmark in progress");
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.label("Preparing benchmark worker...");
+            });
+        });
+    }
+
+    if let Some(status) = status_banner {
+        let fill = match status.kind {
+            RunStatusKind::Success => egui::Color32::from_rgb(223, 245, 229),
+            RunStatusKind::Warning => egui::Color32::from_rgb(250, 238, 208),
+            RunStatusKind::Error => egui::Color32::from_rgb(248, 220, 218),
+        };
+        let stroke = match status.kind {
+            RunStatusKind::Success => egui::Color32::from_rgb(54, 110, 74),
+            RunStatusKind::Warning => egui::Color32::from_rgb(142, 101, 22),
+            RunStatusKind::Error => egui::Color32::from_rgb(158, 54, 46),
+        };
+        egui::Frame::group(ui.style())
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, stroke))
+            .show(ui, |ui| {
+                ui.strong(status.title);
+                ui.label(status.detail);
+            });
     }
 
     if !live_samples.is_empty() {
@@ -96,6 +179,9 @@ pub fn show_controls(
     ui.label(
         "Targets include built-in system storage, removable media, and mounted network shares.",
     );
+    if !controls_enabled {
+        ui.label("Selection controls are disabled until the current benchmark run finishes.");
+    }
     if let Some(selected_target) = selected_target.as_ref() {
         if let Some(device) = devices.iter().find(|device| &device.id == selected_target) {
             ui.label(format!(

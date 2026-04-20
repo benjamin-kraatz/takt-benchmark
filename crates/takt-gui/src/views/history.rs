@@ -8,6 +8,7 @@ pub fn show_history(
     comparison_run_ids: &mut Vec<String>,
     device_filter: &mut Option<String>,
     profile_filter: &mut Option<ProfilePreset>,
+    controls_enabled: bool,
 ) {
     ui.heading("Local History");
     if history.is_empty() {
@@ -15,37 +16,39 @@ pub fn show_history(
         return;
     }
 
-    ui.horizontal(|ui| {
-        ui.label("Device filter");
-        egui::ComboBox::from_id_salt("history-device-filter")
-            .selected_text(device_filter.as_deref().unwrap_or("All devices"))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(device_filter, None, "All devices");
-                let mut unique_devices = history
-                    .iter()
-                    .map(|record| record.target.name.clone())
-                    .collect::<Vec<_>>();
-                unique_devices.sort();
-                unique_devices.dedup();
-                for device in unique_devices {
-                    ui.selectable_value(device_filter, Some(device.clone()), device);
-                }
-            });
+    ui.add_enabled_ui(controls_enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Device filter");
+            egui::ComboBox::from_id_salt("history-device-filter")
+                .selected_text(device_filter.as_deref().unwrap_or("All devices"))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(device_filter, None, "All devices");
+                    let mut unique_devices = history
+                        .iter()
+                        .map(|record| record.target.name.clone())
+                        .collect::<Vec<_>>();
+                    unique_devices.sort();
+                    unique_devices.dedup();
+                    for device in unique_devices {
+                        ui.selectable_value(device_filter, Some(device.clone()), device);
+                    }
+                });
 
-        ui.label("Profile filter");
-        egui::ComboBox::from_id_salt("history-profile-filter")
-            .selected_text(
-                profile_filter
-                    .as_ref()
-                    .map(ProfilePreset::label)
-                    .unwrap_or("All profiles"),
-            )
-            .show_ui(ui, |ui| {
-                ui.selectable_value(profile_filter, None, "All profiles");
-                ui.selectable_value(profile_filter, Some(ProfilePreset::Quick), "Quick");
-                ui.selectable_value(profile_filter, Some(ProfilePreset::Balanced), "Balanced");
-                ui.selectable_value(profile_filter, Some(ProfilePreset::Thorough), "Thorough");
-            });
+            ui.label("Profile filter");
+            egui::ComboBox::from_id_salt("history-profile-filter")
+                .selected_text(
+                    profile_filter
+                        .as_ref()
+                        .map(ProfilePreset::label)
+                        .unwrap_or("All profiles"),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(profile_filter, None, "All profiles");
+                    ui.selectable_value(profile_filter, Some(ProfilePreset::Quick), "Quick");
+                    ui.selectable_value(profile_filter, Some(ProfilePreset::Balanced), "Balanced");
+                    ui.selectable_value(profile_filter, Some(ProfilePreset::Thorough), "Thorough");
+                });
+        });
     });
 
     let filtered = history.iter().filter(|record| {
@@ -62,38 +65,40 @@ pub fn show_history(
         .show(ui, |ui| {
             for record in filtered.take(30) {
                 ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(
-                                selected_run_id.as_ref() == Some(&record.run_id),
-                                format!(
-                                    "{}  {}  {}",
-                                    record.started_at.format("%Y-%m-%d %H:%M:%S"),
-                                    record.target.name,
-                                    record.profile.preset,
-                                ),
-                            )
-                            .clicked()
-                        {
-                            *selected_run_id = Some(record.run_id.clone());
-                        }
-
-                        let compare_selected = comparison_run_ids.contains(&record.run_id);
-                        let compare_label = if compare_selected {
-                            "Remove from compare"
-                        } else {
-                            "Compare"
-                        };
-                        if ui.button(compare_label).clicked() {
-                            if compare_selected {
-                                comparison_run_ids.retain(|run_id| run_id != &record.run_id);
-                            } else {
-                                if comparison_run_ids.len() == 2 {
-                                    comparison_run_ids.remove(0);
-                                }
-                                comparison_run_ids.push(record.run_id.clone());
+                    ui.add_enabled_ui(controls_enabled, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(
+                                    selected_run_id.as_ref() == Some(&record.run_id),
+                                    format!(
+                                        "{}  {}  {}",
+                                        record.started_at.format("%Y-%m-%d %H:%M:%S"),
+                                        record.target.name,
+                                        record.profile.preset,
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                *selected_run_id = Some(record.run_id.clone());
                             }
-                        }
+
+                            let compare_selected = comparison_run_ids.contains(&record.run_id);
+                            let compare_label = if compare_selected {
+                                "Remove from compare"
+                            } else {
+                                "Compare"
+                            };
+                            if ui.button(compare_label).clicked() {
+                                if compare_selected {
+                                    comparison_run_ids.retain(|run_id| run_id != &record.run_id);
+                                } else {
+                                    if comparison_run_ids.len() == 2 {
+                                        comparison_run_ids.remove(0);
+                                    }
+                                    comparison_run_ids.push(record.run_id.clone());
+                                }
+                            }
+                        });
                     });
                     ui.label(format!("run id {}", record.run_id));
                     if !record.tags.is_empty() {
@@ -114,4 +119,8 @@ pub fn show_history(
                 });
             }
         });
+
+    if !controls_enabled {
+        ui.label("History filters, selection, and comparison controls are disabled while a benchmark is running.");
+    }
 }

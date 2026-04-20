@@ -5,6 +5,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, Instant};
 
 use directories::{ProjectDirs, UserDirs};
 use eframe::egui;
@@ -39,17 +40,36 @@ pub struct TaktApp {
     tag_editor: String,
     note_editor: String,
     worker: Option<WorkerState>,
+    benchmark_status: Option<BenchmarkStatusBanner>,
     error_message: Option<String>,
 }
 
 struct WorkerState {
     receiver: Receiver<WorkerEvent>,
     cancel_flag: Arc<AtomicBool>,
+    benchmarks: Vec<BenchmarkType>,
+    profile: BenchmarkProfile,
+    started_at: Instant,
+    cancel_requested: bool,
 }
 
 enum WorkerEvent {
     Progress(ProgressUpdate),
     Finished(Box<Result<BenchmarkRunRecord, String>>),
+}
+
+#[derive(Debug, Clone)]
+struct BenchmarkStatusBanner {
+    kind: BenchmarkStatusKind,
+    title: String,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BenchmarkStatusKind {
+    Success,
+    Cancelled,
+    Failure,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,6 +115,7 @@ impl Default for TaktApp {
             tag_editor: String::new(),
             note_editor: String::new(),
             worker: None,
+            benchmark_status: None,
             error_message: None,
         }
     }
@@ -137,6 +158,7 @@ impl TaktApp {
         self.live_samples.clear();
         self.error_message = None;
         self.export_status = None;
+        self.benchmark_status = None;
 
         let (sender, receiver) = mpsc::channel();
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -147,6 +169,8 @@ impl TaktApp {
         } else {
             self.selected_benchmarks.clone()
         };
+        let worker_profile = profile.clone();
+        let worker_benchmarks = benchmarks.clone();
 
         std::thread::spawn(move || {
             let configuration = RunConfiguration {
@@ -173,17 +197,27 @@ impl TaktApp {
         self.worker = Some(WorkerState {
             receiver,
             cancel_flag,
+            benchmarks: worker_benchmarks,
+            profile: worker_profile,
+            started_at: Instant::now(),
+            cancel_requested: false,
         });
     }
 
     fn cancel_run(&mut self) {
-        if let Some(worker) = &self.worker {
+        if let Some(worker) = &mut self.worker {
+            worker.cancel_requested = true;
             worker.cancel_flag.store(true, Ordering::Relaxed);
         }
     }
 
+    fn is_running(&self) -> bool {
+        self.worker.is_some()
+    }
+
     fn poll_worker(&mut self) {
         let mut finished = false;
+        let mut completion_status = None;
 
         if let Some(worker) = &self.worker {
             while let Ok(event) = worker.receiver.try_recv() {
@@ -197,6 +231,15 @@ impl TaktApp {
                         finished = true;
                         match *result {
                             Ok(run) => {
+                                completion_status = Some(BenchmarkStatusBanner {
+                                    kind: BenchmarkStatusKind::Success,
+                                    title: "Benchmark run completed".to_string(),
+                                    detail: format!(
+                                        "{} finished with {} benchmark result(s).",
+                                        run.display_name(),
+                                        run.results.len(),
+                                    ),
+                                });
                                 self.latest_run = Some(run.clone());
                                 self.selected_run_id = Some(run.run_id.clone());
                                 self.history.insert(0, run.clone());
@@ -204,7 +247,28 @@ impl TaktApp {
                                 self.note_editor = run.notes.clone().unwrap_or_default();
                                 self.error_message = None;
                             }
-                            Err(error) => self.error_message = Some(error),
+                            Err(error) => {
+                                let cancelled = worker.cancel_requested
+                                    || error.eq_ignore_ascii_case("benchmark cancelled");
+                                completion_status = Some(BenchmarkStatusBanner {
+                                    kind: if cancelled {
+                                        BenchmarkStatusKind::Cancelled
+                                    } else {
+                                        BenchmarkStatusKind::Failure
+                                    },
+                                    title: if cancelled {
+                                        "Benchmark run cancelled".to_string()
+                                    } else {
+                                        "Benchmark run failed".to_string()
+                                    },
+                                    detail: if cancelled {
+                                        "Cancellation was requested before the benchmark suite finished. Partial live throughput data may still be shown above.".to_string()
+                                    } else {
+                                        error.clone()
+                                    },
+                                });
+                                self.error_message = if cancelled { None } else { Some(error) };
+                            }
                         }
                     }
                 }
@@ -212,6 +276,7 @@ impl TaktApp {
         }
 
         if finished {
+            self.benchmark_status = completion_status;
             self.worker = None;
         }
     }
@@ -366,31 +431,124 @@ impl TaktApp {
             Err(error) => self.error_message = Some(error.to_string()),
         }
     }
+
+    fn progress_display(&self) -> Option<benchmark::RunProgressDisplay> {
+        let worker = self.worker.as_ref()?;
+        let total_benchmarks = worker.benchmarks.len().max(1);
+        let last_progress = self.last_progress.as_ref();
+        let current_benchmark = last_progress
+            .map(|progress| progress.benchmark)
+            .or_else(|| worker.benchmarks.first().copied())?;
+        let current_index = worker
+            .benchmarks
+            .iter()
+            .position(|benchmark| *benchmark == current_benchmark)
+            .unwrap_or_default();
+        let benchmark_fraction = last_progress
+            .and_then(|progress| benchmark_fraction(progress, &worker.profile));
+        let suite_fraction = (((current_index as f32) + benchmark_fraction.unwrap_or(0.0))
+            / total_benchmarks as f32)
+            .clamp(0.0, 1.0);
+        let elapsed = last_progress
+            .map(|progress| progress.elapsed)
+            .unwrap_or_else(|| worker.started_at.elapsed());
+        let status_line = if let Some(progress) = last_progress {
+            format!(
+                "Running {}/{}: {} {}",
+                current_index + 1,
+                total_benchmarks,
+                progress.benchmark.label(),
+                progress.phase,
+            )
+        } else {
+            format!(
+                "Preparing benchmark 1/{}: {}",
+                total_benchmarks,
+                current_benchmark.label(),
+            )
+        };
+        let detail_line = if let Some(progress) = last_progress {
+            let processed = format_mib(progress.bytes_processed);
+            let current_rate = format!("{:.1} MiB/s", progress.current_mbps);
+            if let Some(total) = progress.bytes_total {
+                format!(
+                    "{} / {} processed, current throughput {}, elapsed {}",
+                    processed,
+                    format_mib(total),
+                    current_rate,
+                    format_duration(progress.elapsed),
+                )
+            } else {
+                format!(
+                    "{} processed, current throughput {}, elapsed {}",
+                    processed,
+                    current_rate,
+                    format_duration(progress.elapsed),
+                )
+            }
+        } else {
+            format!("Starting worker thread, elapsed {}", format_duration(elapsed))
+        };
+        let remaining = worker
+            .benchmarks
+            .iter()
+            .skip(current_index.saturating_add(1))
+            .map(|benchmark| benchmark.label())
+            .collect::<Vec<_>>();
+        let queue_line = if remaining.is_empty() {
+            None
+        } else {
+            Some(format!("Remaining: {}", remaining.join(" -> ")))
+        };
+
+        Some(benchmark::RunProgressDisplay {
+            status_line,
+            detail_line,
+            suite_label: format!("Benchmark suite {:.0}%", suite_fraction * 100.0),
+            suite_fraction,
+            benchmark_label: format!("{} progress", current_benchmark.label()),
+            benchmark_fraction,
+            queue_line,
+            cancelling: worker.cancel_requested,
+        })
+    }
 }
 
 impl eframe::App for TaktApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_worker();
         self.poll_picker();
+        let is_running = self.is_running();
+        let progress_display = self.progress_display();
 
         ui.horizontal(|ui| {
             ui.heading("Takt");
-            if ui.button("Refresh Devices").clicked() {
+            if ui
+                .add_enabled(!is_running, egui::Button::new("Refresh Devices"))
+                .clicked()
+            {
                 self.refresh_devices();
             }
-            let run_label = if self.worker.is_some() {
+            let run_label = if is_running {
                 "Running..."
             } else {
                 "Run Benchmark"
             };
             if ui
-                .add_enabled(self.worker.is_none(), egui::Button::new(run_label))
+                .add_enabled(!is_running, egui::Button::new(run_label))
                 .clicked()
             {
                 self.start_run();
             }
+            let cancel_requested = self
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.cancel_requested);
             if ui
-                .add_enabled(self.worker.is_some(), egui::Button::new("Cancel"))
+                .add_enabled(
+                    is_running && !cancel_requested,
+                    egui::Button::new(if cancel_requested { "Cancelling..." } else { "Cancel" }),
+                )
                 .clicked()
             {
                 self.cancel_run();
@@ -404,7 +562,17 @@ impl eframe::App for TaktApp {
             &mut self.selected_target,
             &mut self.profile,
             &mut self.selected_benchmarks,
-            self.last_progress.as_ref(),
+            !is_running,
+            progress_display.as_ref(),
+            self.benchmark_status.as_ref().map(|status| benchmark::RunStatusBanner {
+                kind: match status.kind {
+                    BenchmarkStatusKind::Success => benchmark::RunStatusKind::Success,
+                    BenchmarkStatusKind::Cancelled => benchmark::RunStatusKind::Warning,
+                    BenchmarkStatusKind::Failure => benchmark::RunStatusKind::Error,
+                },
+                title: status.title.as_str(),
+                detail: status.detail.as_str(),
+            }),
             &self.live_samples,
         );
 
@@ -422,6 +590,7 @@ impl eframe::App for TaktApp {
                 &mut self.export_path,
                 &mut self.export_status,
                 std::slice::from_ref(run),
+                !is_running,
                 self.picker_pending,
             ) {
                 Some(ExportControlAction::Browse) => self.begin_export_picker(&run.display_name()),
@@ -446,6 +615,7 @@ impl eframe::App for TaktApp {
             &mut self.comparison_run_ids,
             &mut self.history_device_filter,
             &mut self.history_profile_filter,
+            !is_running,
         );
         if self.selected_run_id != previous_selected_run {
             self.sync_annotation_editors();
@@ -454,13 +624,15 @@ impl eframe::App for TaktApp {
         if let Some(selected_run) = self.selected_run().cloned() {
             ui.separator();
             ui.heading("Annotations and Export");
-            ui.label("Tags (comma separated)");
-            ui.text_edit_singleline(&mut self.tag_editor);
-            ui.label("Notes");
-            ui.text_edit_multiline(&mut self.note_editor);
-            if ui.button("Save tags and notes").clicked() {
-                self.save_annotations();
-            }
+            ui.add_enabled_ui(!is_running, |ui| {
+                ui.label("Tags (comma separated)");
+                ui.text_edit_singleline(&mut self.tag_editor);
+                ui.label("Notes");
+                ui.text_edit_multiline(&mut self.note_editor);
+                if ui.button("Save tags and notes").clicked() {
+                    self.save_annotations();
+                }
+            });
             match render_export_controls(
                 ui,
                 &mut self.selected_export_format,
@@ -468,6 +640,7 @@ impl eframe::App for TaktApp {
                 &mut self.export_path,
                 &mut self.export_status,
                 std::slice::from_ref(&selected_run),
+                !is_running,
                 self.picker_pending,
             ) {
                 Some(ExportControlAction::Browse) => {
@@ -502,6 +675,7 @@ impl eframe::App for TaktApp {
                 &mut self.export_path,
                 &mut self.export_status,
                 &runs,
+                !is_running,
                 self.picker_pending,
             ) {
                 Some(ExportControlAction::Browse) => self.begin_export_picker("comparison-export"),
@@ -517,7 +691,7 @@ impl eframe::App for TaktApp {
             ui.label(status);
         }
 
-        if self.worker.is_some() {
+        if is_running {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -531,40 +705,43 @@ fn render_export_controls(
     export_path: &mut String,
     export_status: &mut Option<String>,
     runs: &[BenchmarkRunRecord],
+    controls_enabled: bool,
     picker_pending: bool,
 ) -> Option<ExportControlAction> {
     let mut action = None;
     let preview = describe_export(*selected_export_format, runs);
     let normalized_path =
         normalize_export_path(export_path, *selected_export_format, export_directory);
-    ui.horizontal(|ui| {
-        ui.label("Format");
-        egui::ComboBox::from_id_salt(ui.next_auto_id())
-            .selected_text(selected_export_format.label())
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    selected_export_format,
-                    ExportFormat::Json,
-                    ExportFormat::Json.label(),
-                );
-                ui.selectable_value(
-                    selected_export_format,
-                    ExportFormat::Markdown,
-                    ExportFormat::Markdown.label(),
-                );
-                ui.selectable_value(
-                    selected_export_format,
-                    ExportFormat::Html,
-                    ExportFormat::Html.label(),
-                );
-                ui.selectable_value(
-                    selected_export_format,
-                    ExportFormat::Png,
-                    ExportFormat::Png.label(),
-                );
-            });
-        ui.label("Export path");
-        ui.text_edit_singleline(export_path);
+    ui.add_enabled_ui(controls_enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Format");
+            egui::ComboBox::from_id_salt(ui.next_auto_id())
+                .selected_text(selected_export_format.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        selected_export_format,
+                        ExportFormat::Json,
+                        ExportFormat::Json.label(),
+                    );
+                    ui.selectable_value(
+                        selected_export_format,
+                        ExportFormat::Markdown,
+                        ExportFormat::Markdown.label(),
+                    );
+                    ui.selectable_value(
+                        selected_export_format,
+                        ExportFormat::Html,
+                        ExportFormat::Html.label(),
+                    );
+                    ui.selectable_value(
+                        selected_export_format,
+                        ExportFormat::Png,
+                        ExportFormat::Png.label(),
+                    );
+                });
+            ui.label("Export path");
+            ui.text_edit_singleline(export_path);
+        });
     });
     ui.group(|ui| {
         ui.strong("Export Preview");
@@ -593,32 +770,68 @@ fn render_export_controls(
             ui.label(format!("Selection: {}", run_summary.join(" ")));
         }
     });
-    ui.horizontal_wrapped(|ui| {
-        if ui
-            .add_enabled(
-                !picker_pending,
-                egui::Button::new(if picker_pending {
-                    "Choosing..."
-                } else {
-                    "Browse..."
-                }),
-            )
-            .clicked()
-        {
-            action = Some(ExportControlAction::Browse);
-        }
-        if ui
-            .button(format!("Export {}", selected_export_format.label()))
-            .clicked()
-        {
-            action = Some(ExportControlAction::Export);
-        }
-        if ui.button("Clear status").clicked() {
-            *export_status = None;
-        }
+    ui.add_enabled_ui(controls_enabled, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    !picker_pending,
+                    egui::Button::new(if picker_pending {
+                        "Choosing..."
+                    } else {
+                        "Browse..."
+                    }),
+                )
+                .clicked()
+            {
+                action = Some(ExportControlAction::Browse);
+            }
+            if ui
+                .button(format!("Export {}", selected_export_format.label()))
+                .clicked()
+            {
+                action = Some(ExportControlAction::Export);
+            }
+            if ui.button("Clear status").clicked() {
+                *export_status = None;
+            }
+        });
     });
+    if !controls_enabled {
+        ui.label("Export controls are disabled while a benchmark is running.");
+    }
 
     action
+}
+
+fn benchmark_fraction(progress: &ProgressUpdate, profile: &BenchmarkProfile) -> Option<f32> {
+    if let Some(total) = progress.bytes_total {
+        if total == 0 {
+            return None;
+        }
+        return Some((progress.bytes_processed as f32 / total as f32).clamp(0.0, 1.0));
+    }
+
+    match progress.benchmark {
+        BenchmarkType::SustainedWrite => Some(
+            (progress.elapsed.as_secs_f32() / profile.sustained_seconds.max(1) as f32)
+                .clamp(0.0, 1.0),
+        ),
+        _ => None,
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60,
+    )
+}
+
+fn format_mib(bytes: u64) -> String {
+    format!("{:.1} MiB", bytes as f64 / 1024.0 / 1024.0)
 }
 
 fn normalize_export_path(path: &str, format: ExportFormat, export_directory: &Path) -> PathBuf {

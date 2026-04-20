@@ -94,11 +94,11 @@ pub fn run_benchmark(
     };
     let configuration = RunConfiguration {
         profile,
-        benchmarks,
+        benchmarks: benchmarks.clone(),
         keep_temp_files,
     };
 
-    let mut reporter = TerminalReporter::new();
+    let mut reporter = TerminalReporter::new(&benchmarks);
     let mut run = run_benchmark_suite(&target, configuration, None, |update| {
         reporter.update(update);
     })?;

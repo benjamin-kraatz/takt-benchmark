@@ -3,20 +3,26 @@ use takt_core::{BenchmarkRunRecord, BenchmarkType, ProgressUpdate};
 
 pub struct TerminalReporter {
     progress_bar: ProgressBar,
+    benchmarks: Vec<BenchmarkType>,
     current_benchmark: Option<BenchmarkType>,
 }
 
 impl TerminalReporter {
-    pub fn new() -> Self {
+    pub fn new(benchmarks: &[BenchmarkType]) -> Self {
         let progress_bar = ProgressBar::new_spinner();
         progress_bar.enable_steady_tick(std::time::Duration::from_millis(120));
         progress_bar.set_style(
             ProgressStyle::with_template("{spinner:.green} {msg}")
                 .expect("valid progress template"),
         );
+        progress_bar.set_message(format!(
+            "Preparing {} benchmark(s)...",
+            benchmarks.len().max(1)
+        ));
 
         Self {
             progress_bar,
+            benchmarks: benchmarks.to_vec(),
             current_benchmark: None,
         }
     }
@@ -37,8 +43,16 @@ impl TerminalReporter {
                 .set_position(update.bytes_processed.min(total));
         }
 
+        let benchmark_index = self
+            .benchmarks
+            .iter()
+            .position(|benchmark| *benchmark == update.benchmark)
+            .map(|index| index + 1)
+            .unwrap_or(1);
         self.progress_bar.set_message(format!(
-            "{} {} {:.1} MiB/s elapsed {:.1}s",
+            "[{}/{}] {} {} {:.1} MiB/s elapsed {:.1}s",
+            benchmark_index,
+            self.benchmarks.len().max(1),
             update.benchmark.label(),
             update.phase,
             update.current_mbps,
