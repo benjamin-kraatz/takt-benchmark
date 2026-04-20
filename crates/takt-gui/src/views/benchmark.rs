@@ -168,13 +168,23 @@ pub fn show_controls(
     }
 
     if !live_samples.is_empty() {
+        let mut reset_zoom = false;
+        ui.horizontal(|ui| {
+            ui.strong("Live throughput");
+            if ui.small_button("Reset zoom").clicked() {
+                reset_zoom = true;
+            }
+        });
         let points = PlotPoints::from_iter(live_samples.iter().copied());
         let line = Line::new("Throughput", points);
-        Plot::new(format!("throughput-plot-{live_plot_revision}"))
+        let mut plot = Plot::new(format!("throughput-plot-{live_plot_revision}"))
             .height(180.0)
             .include_x(0.0)
-            .include_y(0.0)
-            .show(ui, |plot_ui| plot_ui.line(line));
+            .include_y(0.0);
+        if reset_zoom {
+            plot = plot.reset();
+        }
+        plot.show(ui, |plot_ui| plot_ui.line(line));
     }
 
     ui.separator();

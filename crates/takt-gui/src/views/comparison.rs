@@ -3,7 +3,13 @@ use egui_plot::{Line, Plot, PlotPoints};
 use takt_core::{BenchmarkRunRecord, BenchmarkType};
 
 pub fn show_trend_view(ui: &mut egui::Ui, runs: &[BenchmarkRunRecord]) {
-    ui.heading("Device Trend");
+    let mut reset_zoom = false;
+    ui.horizontal(|ui| {
+        ui.heading("Device Trend");
+        if ui.small_button("Reset zoom").clicked() {
+            reset_zoom = true;
+        }
+    });
     if runs.is_empty() {
         ui.label("Select a device or run to see trend history.");
         return;
@@ -16,19 +22,22 @@ pub fn show_trend_view(ui: &mut egui::Ui, runs: &[BenchmarkRunRecord]) {
         runs.len(),
     );
 
-    Plot::new(trend_plot_id)
+    let mut plot = Plot::new(trend_plot_id)
         .height(220.0)
-        .include_y(0.0)
-        .show(ui, |plot_ui| {
-            for benchmark in BenchmarkType::ALL {
-                let points =
-                    PlotPoints::from_iter(runs.iter().enumerate().filter_map(|(index, run)| {
-                        run.result_for(benchmark)
-                            .map(|result| [index as f64, result.average_mbps])
-                    }));
-                plot_ui.line(Line::new(benchmark.label(), points));
-            }
-        });
+        .include_x(0.0)
+        .include_y(0.0);
+    if reset_zoom {
+        plot = plot.reset();
+    }
+    plot.show(ui, |plot_ui| {
+        for benchmark in BenchmarkType::ALL {
+            let points = PlotPoints::from_iter(runs.iter().enumerate().filter_map(|(index, run)| {
+                run.result_for(benchmark)
+                    .map(|result| [index as f64, result.average_mbps])
+            }));
+            plot_ui.line(Line::new(benchmark.label(), points));
+        }
+    });
 }
 
 pub fn show_two_run_comparison(
@@ -86,7 +95,14 @@ pub fn show_two_run_comparison(
         }
 
         ui.collapsing(format!("{} overlay", benchmark.label()), |ui| {
-            Plot::new(format!(
+            let mut reset_zoom = false;
+            ui.horizontal(|ui| {
+                ui.label("Overlay plot");
+                if ui.small_button("Reset zoom").clicked() {
+                    reset_zoom = true;
+                }
+            });
+            let mut plot = Plot::new(format!(
                 "compare-{}-{}-{}",
                 benchmark.slug(),
                 left.run_id,
@@ -94,31 +110,34 @@ pub fn show_two_run_comparison(
             ))
                 .height(160.0)
                 .include_x(0.0)
-                .include_y(0.0)
-                .show(ui, |plot_ui| {
-                    if let Some(result) = left_result {
-                        plot_ui.line(Line::new(
-                            format!("Left: {}", left.started_at.format("%m-%d %H:%M")),
-                            PlotPoints::from_iter(
-                                result
-                                    .samples
-                                    .iter()
-                                    .map(|sample| [sample.seconds, sample.throughput_mbps]),
-                            ),
-                        ));
-                    }
-                    if let Some(result) = right_result {
-                        plot_ui.line(Line::new(
-                            format!("Right: {}", right.started_at.format("%m-%d %H:%M")),
-                            PlotPoints::from_iter(
-                                result
-                                    .samples
-                                    .iter()
-                                    .map(|sample| [sample.seconds, sample.throughput_mbps]),
-                            ),
-                        ));
-                    }
-                });
+                .include_y(0.0);
+            if reset_zoom {
+                plot = plot.reset();
+            }
+            plot.show(ui, |plot_ui| {
+                if let Some(result) = left_result {
+                    plot_ui.line(Line::new(
+                        format!("Left: {}", left.started_at.format("%m-%d %H:%M")),
+                        PlotPoints::from_iter(
+                            result
+                                .samples
+                                .iter()
+                                .map(|sample| [sample.seconds, sample.throughput_mbps]),
+                        ),
+                    ));
+                }
+                if let Some(result) = right_result {
+                    plot_ui.line(Line::new(
+                        format!("Right: {}", right.started_at.format("%m-%d %H:%M")),
+                        PlotPoints::from_iter(
+                            result
+                                .samples
+                                .iter()
+                                .map(|sample| [sample.seconds, sample.throughput_mbps]),
+                        ),
+                    ));
+                }
+            });
         });
     }
 }

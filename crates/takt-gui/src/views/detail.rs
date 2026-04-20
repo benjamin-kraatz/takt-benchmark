@@ -18,12 +18,24 @@ pub fn show_run_detail(ui: &mut egui::Ui, run: &BenchmarkRunRecord) {
                 .map(|result| [index as f64, result.average_mbps])
         },
     ));
-    Plot::new(format!("detail-overview-{}", run.run_id))
+    let mut reset_overview_zoom = false;
+    ui.horizontal(|ui| {
+        ui.strong("Average throughput overview");
+        if ui.small_button("Reset zoom").clicked() {
+            reset_overview_zoom = true;
+        }
+    });
+    let mut overview_plot = Plot::new(format!("detail-overview-{}", run.run_id))
         .height(180.0)
+        .include_x(0.0)
         .include_y(0.0)
-        .show(ui, |plot_ui| {
-            plot_ui.line(Line::new("Average throughput", overview_points));
-        });
+        ;
+    if reset_overview_zoom {
+        overview_plot = overview_plot.reset();
+    }
+    overview_plot.show(ui, |plot_ui| {
+        plot_ui.line(Line::new("Average throughput", overview_points));
+    });
 
     egui::Grid::new("detail-grid").striped(true).show(ui, |ui| {
         ui.strong("Benchmark");
@@ -68,19 +80,30 @@ pub fn show_run_detail(ui: &mut egui::Ui, run: &BenchmarkRunRecord) {
                 return;
             }
 
+            let mut reset_zoom = false;
+            ui.horizontal(|ui| {
+                ui.label("Throughput timeline");
+                if ui.small_button("Reset zoom").clicked() {
+                    reset_zoom = true;
+                }
+            });
+
             let points = PlotPoints::from_iter(
                 result
                     .samples
                     .iter()
                     .map(|sample| [sample.seconds, sample.throughput_mbps]),
             );
-            Plot::new(format!("detail-{}-{}", run.run_id, result.benchmark.slug()))
+            let mut plot = Plot::new(format!("detail-{}-{}", run.run_id, result.benchmark.slug()))
                 .height(160.0)
                 .include_x(0.0)
-                .include_y(0.0)
-                .show(ui, |plot_ui| {
-                    plot_ui.line(Line::new(result.benchmark.label(), points));
-                });
+                .include_y(0.0);
+            if reset_zoom {
+                plot = plot.reset();
+            }
+            plot.show(ui, |plot_ui| {
+                plot_ui.line(Line::new(result.benchmark.label(), points));
+            });
         });
     }
 }
