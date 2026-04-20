@@ -41,6 +41,7 @@ pub struct TaktApp {
     note_editor: String,
     auto_cleanup_temp_dirs: bool,
     worker: Option<WorkerState>,
+    pending_dialog: Option<PendingDialog>,
     benchmark_status: Option<BenchmarkStatusBanner>,
     cleanup_status: Option<String>,
     live_plot_revision: u64,
@@ -60,6 +61,18 @@ struct WorkerState {
 enum WorkerEvent {
     Progress(ProgressUpdate),
     Finished(Box<Result<BenchmarkRunRecord, String>>),
+}
+
+#[derive(Debug, Clone)]
+enum PendingDialog {
+    ConfirmCleanup { target: DeviceTarget },
+    ConfirmBuiltInRun { target: DeviceTarget, step: BuiltInRunStep },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BuiltInRunStep {
+    Initial,
+    Final,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +133,7 @@ impl Default for TaktApp {
             note_editor: String::new(),
             auto_cleanup_temp_dirs: true,
             worker: None,
+            pending_dialog: None,
             benchmark_status: None,
             cleanup_status: None,
             live_plot_revision: 0,
@@ -151,15 +165,10 @@ impl TaktApp {
         self.devices.iter().find(|device| &device.id == selected)
     }
 
-    fn start_run(&mut self) {
+    fn start_run_for_target(&mut self, target: DeviceTarget) {
         if self.worker.is_some() {
             return;
         }
-
-        let Some(target) = self.selected_device().cloned() else {
-            self.error_message = Some("select a benchmark target first".to_string());
-            return;
-        };
 
         self.last_progress = None;
         self.live_samples.clear();
@@ -321,6 +330,106 @@ impl TaktApp {
                 self.error_message = None;
             }
             Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    fn request_cleanup_selected_temp_dirs(&mut self) {
+        let Some(target) = self.selected_device().cloned() else {
+            self.error_message = Some("select a benchmark target first".to_string());
+            return;
+        };
+
+        self.pending_dialog = Some(PendingDialog::ConfirmCleanup { target });
+    }
+
+    fn request_start_run(&mut self) {
+        let Some(target) = self.selected_device().cloned() else {
+            self.error_message = Some("select a benchmark target first".to_string());
+            return;
+        };
+
+        if is_high_risk_benchmark_target(&target) {
+            self.pending_dialog = Some(PendingDialog::ConfirmBuiltInRun {
+                target,
+                step: BuiltInRunStep::Initial,
+            });
+        } else {
+            self.start_run_for_target(target);
+        }
+    }
+
+    fn show_pending_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.pending_dialog.clone() else {
+            return;
+        };
+
+        match dialog {
+            PendingDialog::ConfirmCleanup { target } => {
+                egui::Window::new("Confirm Cleanup")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "Remove leftover .takt-* directories from {}?",
+                            target.mount_point.display()
+                        ));
+                        ui.label("This only affects benchmark temp directories on the selected target.");
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                self.pending_dialog = None;
+                            }
+                            if ui.button("Clean Temp Dirs").clicked() {
+                                self.pending_dialog = None;
+                                self.cleanup_selected_temp_dirs();
+                            }
+                        });
+                    });
+            }
+            PendingDialog::ConfirmBuiltInRun { target, step } => {
+                let (title, warning, confirm_label) = match step {
+                    BuiltInRunStep::Initial => (
+                        "Confirm Built-In Benchmark",
+                        format!(
+                            "{} is built-in storage at {}. Running benchmarks here can stress your system volume and affect the machine while the test runs.",
+                            target.name,
+                            target.mount_point.display()
+                        ),
+                        "Continue",
+                    ),
+                    BuiltInRunStep::Final => (
+                        "Confirm Again",
+                        "This is the second confirmation for a built-in storage benchmark. Only continue if you explicitly want to benchmark this internal volume.".to_string(),
+                        "Run Benchmark",
+                    ),
+                };
+                egui::Window::new(title)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(warning);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                self.pending_dialog = None;
+                            }
+                            if ui.button(confirm_label).clicked() {
+                                match step {
+                                    BuiltInRunStep::Initial => {
+                                        self.pending_dialog = Some(PendingDialog::ConfirmBuiltInRun {
+                                            target,
+                                            step: BuiltInRunStep::Final,
+                                        });
+                                    }
+                                    BuiltInRunStep::Final => {
+                                        self.pending_dialog = None;
+                                        self.start_run_for_target(target);
+                                    }
+                                }
+                            }
+                        });
+                    });
+            }
         }
     }
 
@@ -577,7 +686,7 @@ impl eframe::App for TaktApp {
                     .add_enabled(!is_running, egui::Button::new("Clean Temp Dirs"))
                     .clicked()
                 {
-                    self.cleanup_selected_temp_dirs();
+                    self.request_cleanup_selected_temp_dirs();
                 }
                 let run_label = if is_running {
                     "Running..."
@@ -588,7 +697,7 @@ impl eframe::App for TaktApp {
                     .add_enabled(!is_running, egui::Button::new(run_label))
                     .clicked()
                 {
-                    self.start_run();
+                    self.request_start_run();
                 }
                 let cancel_requested = self
                     .worker
@@ -618,6 +727,10 @@ impl eframe::App for TaktApp {
         ui.separator();
 
         egui::ScrollArea::vertical()
+            .scroll_source(
+                egui::scroll_area::ScrollSource::SCROLL_BAR
+                    | egui::scroll_area::ScrollSource::MOUSE_WHEEL,
+            )
             .auto_shrink([false, false])
             .show(ui, |ui| {
 
@@ -762,6 +875,8 @@ impl eframe::App for TaktApp {
                 }
             });
 
+        self.show_pending_dialog(ui.ctx());
+
         if is_running {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
@@ -783,6 +898,10 @@ fn cleanup_message(target: &DeviceTarget, removed: usize) -> String {
             target.mount_point.display()
         )
     }
+}
+
+fn is_high_risk_benchmark_target(target: &DeviceTarget) -> bool {
+    matches!(target.kind, takt_core::DeviceKind::BuiltIn)
 }
 
 fn render_export_controls(
