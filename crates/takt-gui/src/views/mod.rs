@@ -16,6 +16,7 @@ pub enum ExportAction {
     Export,
 }
 
+#[allow(dead_code)]
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(palette::BG_CARD)
