@@ -35,6 +35,7 @@ pub fn show_controls(
     controls_enabled: bool,
     progress_display: Option<&RunProgressDisplay>,
     status_banner: Option<RunStatusBanner<'_>>,
+    live_plot_revision: u64,
     live_samples: &[[f64; 2]],
 ) {
     ui.heading("Benchmark Runner");
@@ -169,8 +170,9 @@ pub fn show_controls(
     if !live_samples.is_empty() {
         let points = PlotPoints::from_iter(live_samples.iter().copied());
         let line = Line::new("Throughput", points);
-        Plot::new("throughput-plot")
+        Plot::new(format!("throughput-plot-{live_plot_revision}"))
             .height(180.0)
+            .include_x(0.0)
             .include_y(0.0)
             .show(ui, |plot_ui| plot_ui.line(line));
     }

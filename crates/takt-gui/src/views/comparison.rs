@@ -9,7 +9,14 @@ pub fn show_trend_view(ui: &mut egui::Ui, runs: &[BenchmarkRunRecord]) {
         return;
     }
 
-    Plot::new("trend-plot")
+    let trend_plot_id = format!(
+        "trend-plot-{}-{}-{}",
+        runs.first().map(|run| run.run_id.as_str()).unwrap_or("none"),
+        runs.last().map(|run| run.run_id.as_str()).unwrap_or("none"),
+        runs.len(),
+    );
+
+    Plot::new(trend_plot_id)
         .height(220.0)
         .include_y(0.0)
         .show(ui, |plot_ui| {
@@ -79,8 +86,14 @@ pub fn show_two_run_comparison(
         }
 
         ui.collapsing(format!("{} overlay", benchmark.label()), |ui| {
-            Plot::new(format!("compare-{}", benchmark.slug()))
+            Plot::new(format!(
+                "compare-{}-{}-{}",
+                benchmark.slug(),
+                left.run_id,
+                right.run_id
+            ))
                 .height(160.0)
+                .include_x(0.0)
                 .include_y(0.0)
                 .show(ui, |plot_ui| {
                     if let Some(result) = left_result {

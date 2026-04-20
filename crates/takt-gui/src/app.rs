@@ -41,6 +41,7 @@ pub struct TaktApp {
     note_editor: String,
     worker: Option<WorkerState>,
     benchmark_status: Option<BenchmarkStatusBanner>,
+    live_plot_revision: u64,
     error_message: Option<String>,
 }
 
@@ -116,6 +117,7 @@ impl Default for TaktApp {
             note_editor: String::new(),
             worker: None,
             benchmark_status: None,
+            live_plot_revision: 0,
             error_message: None,
         }
     }
@@ -159,6 +161,7 @@ impl TaktApp {
         self.error_message = None;
         self.export_status = None;
         self.benchmark_status = None;
+        self.live_plot_revision = self.live_plot_revision.wrapping_add(1);
 
         let (sender, receiver) = mpsc::channel();
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -231,6 +234,7 @@ impl TaktApp {
                         finished = true;
                         match *result {
                             Ok(run) => {
+                                self.live_plot_revision = self.live_plot_revision.wrapping_add(1);
                                 completion_status = Some(BenchmarkStatusBanner {
                                     kind: BenchmarkStatusKind::Success,
                                     title: "Benchmark run completed".to_string(),
@@ -573,6 +577,7 @@ impl eframe::App for TaktApp {
                 title: status.title.as_str(),
                 detail: status.detail.as_str(),
             }),
+            self.live_plot_revision,
             &self.live_samples,
         );
 

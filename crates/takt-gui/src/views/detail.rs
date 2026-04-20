@@ -18,7 +18,7 @@ pub fn show_run_detail(ui: &mut egui::Ui, run: &BenchmarkRunRecord) {
                 .map(|result| [index as f64, result.average_mbps])
         },
     ));
-    Plot::new("detail-overview")
+    Plot::new(format!("detail-overview-{}", run.run_id))
         .height(180.0)
         .include_y(0.0)
         .show(ui, |plot_ui| {
@@ -74,8 +74,9 @@ pub fn show_run_detail(ui: &mut egui::Ui, run: &BenchmarkRunRecord) {
                     .iter()
                     .map(|sample| [sample.seconds, sample.throughput_mbps]),
             );
-            Plot::new(format!("detail-{}", result.benchmark.slug()))
+            Plot::new(format!("detail-{}-{}", run.run_id, result.benchmark.slug()))
                 .height(160.0)
+                .include_x(0.0)
                 .include_y(0.0)
                 .show(ui, |plot_ui| {
                     plot_ui.line(Line::new(result.benchmark.label(), points));
