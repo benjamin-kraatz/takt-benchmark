@@ -12,8 +12,8 @@ use eframe::egui;
 use rfd::FileDialog;
 use takt_core::{
     BenchmarkProfile, BenchmarkRunRecord, BenchmarkType, DeviceTarget, ExportFormat, HistoryStore,
-    ProfilePreset, ProgressUpdate, RunConfiguration, describe_export, discover_devices,
-    export_runs_to_path, run_benchmark_suite,
+    ProfilePreset, ProgressUpdate, RunConfiguration, cleanup_benchmark_temp_dirs,
+    describe_export, discover_devices, export_runs_to_path, run_benchmark_suite,
 };
 
 use crate::views::{benchmark, comparison, detail, history};
@@ -39,8 +39,10 @@ pub struct TaktApp {
     picker_pending: bool,
     tag_editor: String,
     note_editor: String,
+    auto_cleanup_temp_dirs: bool,
     worker: Option<WorkerState>,
     benchmark_status: Option<BenchmarkStatusBanner>,
+    cleanup_status: Option<String>,
     live_plot_revision: u64,
     error_message: Option<String>,
 }
@@ -48,6 +50,7 @@ pub struct TaktApp {
 struct WorkerState {
     receiver: Receiver<WorkerEvent>,
     cancel_flag: Arc<AtomicBool>,
+    target: DeviceTarget,
     benchmarks: Vec<BenchmarkType>,
     profile: BenchmarkProfile,
     started_at: Instant,
@@ -115,8 +118,10 @@ impl Default for TaktApp {
             picker_pending: false,
             tag_editor: String::new(),
             note_editor: String::new(),
+            auto_cleanup_temp_dirs: true,
             worker: None,
             benchmark_status: None,
+            cleanup_status: None,
             live_plot_revision: 0,
             error_message: None,
         }
@@ -161,6 +166,7 @@ impl TaktApp {
         self.error_message = None;
         self.export_status = None;
         self.benchmark_status = None;
+        self.cleanup_status = None;
         self.live_plot_revision = self.live_plot_revision.wrapping_add(1);
 
         let (sender, receiver) = mpsc::channel();
@@ -172,6 +178,7 @@ impl TaktApp {
         } else {
             self.selected_benchmarks.clone()
         };
+        let worker_target = target.clone();
         let worker_profile = profile.clone();
         let worker_benchmarks = benchmarks.clone();
 
@@ -200,6 +207,7 @@ impl TaktApp {
         self.worker = Some(WorkerState {
             receiver,
             cancel_flag,
+            target: worker_target,
             benchmarks: worker_benchmarks,
             profile: worker_profile,
             started_at: Instant::now(),
@@ -221,6 +229,7 @@ impl TaktApp {
     fn poll_worker(&mut self) {
         let mut finished = false;
         let mut completion_status = None;
+        let mut cleanup_target = None;
 
         if let Some(worker) = &self.worker {
             while let Ok(event) = worker.receiver.try_recv() {
@@ -232,6 +241,7 @@ impl TaktApp {
                     }
                     WorkerEvent::Finished(result) => {
                         finished = true;
+                        cleanup_target = Some(worker.target.clone());
                         match *result {
                             Ok(run) => {
                                 self.live_plot_revision = self.live_plot_revision.wrapping_add(1);
@@ -280,8 +290,37 @@ impl TaktApp {
         }
 
         if finished {
+            if self.auto_cleanup_temp_dirs {
+                if let Some(target) = cleanup_target.as_ref() {
+                    match cleanup_benchmark_temp_dirs(target) {
+                        Ok(removed) => {
+                            let detail = cleanup_message(target, removed);
+                            self.cleanup_status = Some(detail.clone());
+                            if let Some(status) = completion_status.as_mut() {
+                                status.detail = format!("{} {}", status.detail, detail);
+                            }
+                        }
+                        Err(error) => self.error_message = Some(error.to_string()),
+                    }
+                }
+            }
             self.benchmark_status = completion_status;
             self.worker = None;
+        }
+    }
+
+    fn cleanup_selected_temp_dirs(&mut self) {
+        let Some(target) = self.selected_device().cloned() else {
+            self.error_message = Some("select a benchmark target first".to_string());
+            return;
+        };
+
+        match cleanup_benchmark_temp_dirs(&target) {
+            Ok(removed) => {
+                self.cleanup_status = Some(cleanup_message(&target, removed));
+                self.error_message = None;
+            }
+            Err(error) => self.error_message = Some(error.to_string()),
         }
     }
 
@@ -525,47 +564,62 @@ impl eframe::App for TaktApp {
         let is_running = self.is_running();
         let progress_display = self.progress_display();
 
+        ui.group(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.heading("Takt");
+                if ui
+                    .add_enabled(!is_running, egui::Button::new("Refresh Devices"))
+                    .clicked()
+                {
+                    self.refresh_devices();
+                }
+                if ui
+                    .add_enabled(!is_running, egui::Button::new("Clean Temp Dirs"))
+                    .clicked()
+                {
+                    self.cleanup_selected_temp_dirs();
+                }
+                let run_label = if is_running {
+                    "Running..."
+                } else {
+                    "Run Benchmark"
+                };
+                if ui
+                    .add_enabled(!is_running, egui::Button::new(run_label))
+                    .clicked()
+                {
+                    self.start_run();
+                }
+                let cancel_requested = self
+                    .worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.cancel_requested);
+                if ui
+                    .add_enabled(
+                        is_running && !cancel_requested,
+                        egui::Button::new(if cancel_requested {
+                            "Cancelling..."
+                        } else {
+                            "Cancel"
+                        }),
+                    )
+                    .clicked()
+                {
+                    self.cancel_run();
+                }
+                ui.add_enabled_ui(!is_running, |ui| {
+                    ui.checkbox(&mut self.auto_cleanup_temp_dirs, "Auto-clean temp dirs");
+                });
+            });
+            if let Some(status) = &self.cleanup_status {
+                ui.label(status);
+            }
+        });
+        ui.separator();
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Takt");
-                    if ui
-                        .add_enabled(!is_running, egui::Button::new("Refresh Devices"))
-                        .clicked()
-                    {
-                        self.refresh_devices();
-                    }
-                    let run_label = if is_running {
-                        "Running..."
-                    } else {
-                        "Run Benchmark"
-                    };
-                    if ui
-                        .add_enabled(!is_running, egui::Button::new(run_label))
-                        .clicked()
-                    {
-                        self.start_run();
-                    }
-                    let cancel_requested = self
-                        .worker
-                        .as_ref()
-                        .is_some_and(|worker| worker.cancel_requested);
-                    if ui
-                        .add_enabled(
-                            is_running && !cancel_requested,
-                            egui::Button::new(if cancel_requested {
-                                "Cancelling..."
-                            } else {
-                                "Cancel"
-                            }),
-                        )
-                        .clicked()
-                    {
-                        self.cancel_run();
-                    }
-                });
-                ui.separator();
 
                 benchmark::show_controls(
                     ui,
@@ -712,6 +766,22 @@ impl eframe::App for TaktApp {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+}
+
+fn cleanup_message(target: &DeviceTarget, removed: usize) -> String {
+    if removed == 0 {
+        format!(
+            "No leftover benchmark temp directories found on {}.",
+            target.mount_point.display()
+        )
+    } else {
+        format!(
+            "Removed {} leftover benchmark temp director{} from {}.",
+            removed,
+            if removed == 1 { "y" } else { "ies" },
+            target.mount_point.display()
+        )
     }
 }
 

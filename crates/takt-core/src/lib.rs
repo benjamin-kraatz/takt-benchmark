@@ -5,7 +5,8 @@ pub mod history;
 
 pub use bench::{
     BenchmarkProfile, BenchmarkResult, BenchmarkRunRecord, BenchmarkType, ProfilePreset,
-    ProgressUpdate, RunConfiguration, SamplePoint, run_benchmark_suite,
+    ProgressUpdate, RunConfiguration, SamplePoint, cleanup_benchmark_temp_dirs,
+    run_benchmark_suite,
 };
 pub use device::{DeviceKind, DeviceTarget, discover_devices};
 pub use export::{

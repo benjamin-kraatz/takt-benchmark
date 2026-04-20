@@ -24,7 +24,9 @@ Random IOPS uses a fixed-size scratch file, seeks to random block offsets, and p
 
 ## Cleanup
 
-Each benchmark run uses a hidden `.takt-*` directory on the target. The directory is removed after completion unless the caller explicitly requests retention.
+Each benchmark run uses a hidden `.takt-*` directory on the target. The active run directory is removed on normal completion and is also cleaned up on cancellation or failure unless the caller explicitly requests retention.
+
+The GUI also exposes a manual cleanup action for the selected target and keeps an auto-clean toggle enabled by default, so stale `.takt-*` directories left behind by older runs can be removed without leaving the app.
 
 ## Benchmark selection
 

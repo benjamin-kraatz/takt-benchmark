@@ -26,6 +26,7 @@ pub use sustained::run_sustained_write;
 
 const MIB: u64 = 1024 * 1024;
 const KIB: u64 = 1024;
+const TEMP_DIR_PREFIX: &str = ".takt-";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum BenchmarkType {
@@ -305,9 +306,7 @@ pub fn run_benchmark_suite(
 ) -> Result<BenchmarkRunRecord> {
     configuration.profile.validate_for(target)?;
     let started_at = Utc::now();
-    let temp_dir = target
-        .mount_point
-        .join(format!(".takt-{}", started_at.format("%Y%m%d%H%M%S")));
+    let temp_dir = benchmark_temp_dir(target, &started_at);
     fs::create_dir_all(&temp_dir)
         .with_context(|| format!("failed to create temp dir {}", temp_dir.display()))?;
 
@@ -316,33 +315,86 @@ pub fn run_benchmark_suite(
         profile: configuration.profile.clone(),
         cancel_flag,
     };
+    let run_result = (|| {
+        let mut results = Vec::new();
 
-    let mut results = Vec::new();
+        for benchmark in &configuration.benchmarks {
+            let result = match benchmark {
+                BenchmarkType::SequentialWrite => {
+                    run_sequential_write(target, &context, &mut progress)
+                }
+                BenchmarkType::SequentialRead => run_sequential_read(target, &context, &mut progress),
+                BenchmarkType::SustainedWrite => run_sustained_write(target, &context, &mut progress),
+                BenchmarkType::RandomIops => run_random_iops(target, &context, &mut progress),
+            }?;
+            results.push(result);
+        }
 
-    for benchmark in &configuration.benchmarks {
-        let result = match benchmark {
-            BenchmarkType::SequentialWrite => run_sequential_write(target, &context, &mut progress),
-            BenchmarkType::SequentialRead => run_sequential_read(target, &context, &mut progress),
-            BenchmarkType::SustainedWrite => run_sustained_write(target, &context, &mut progress),
-            BenchmarkType::RandomIops => run_random_iops(target, &context, &mut progress),
-        }?;
-        results.push(result);
-    }
+        Ok(BenchmarkRunRecord {
+            run_id: build_run_id(&started_at, &target.id),
+            started_at,
+            finished_at: Utc::now(),
+            target: target.clone(),
+            profile: configuration.profile.clone(),
+            tags: Vec::new(),
+            notes: None,
+            results,
+        })
+    })();
 
     if !configuration.keep_temp_files {
-        fs::remove_dir_all(&temp_dir).ok();
+        let _ = remove_temp_dir_if_present(&temp_dir);
     }
 
-    Ok(BenchmarkRunRecord {
-        run_id: build_run_id(&started_at, &target.id),
-        started_at,
-        finished_at: Utc::now(),
-        target: target.clone(),
-        profile: configuration.profile,
-        tags: Vec::new(),
-        notes: None,
-        results,
-    })
+    run_result
+}
+
+pub fn cleanup_benchmark_temp_dirs(target: &DeviceTarget) -> Result<usize> {
+    cleanup_benchmark_temp_dirs_in_path(&target.mount_point)
+}
+
+fn cleanup_benchmark_temp_dirs_in_path(path: &Path) -> Result<usize> {
+    let mut removed = 0;
+    let entries = fs::read_dir(path)
+        .with_context(|| format!("failed to read benchmark target {}", path.display()))?;
+
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to inspect {}", path.display()))?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to inspect {}", entry.path().display()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if !file_name.starts_with(TEMP_DIR_PREFIX) {
+            continue;
+        }
+
+        fs::remove_dir_all(entry.path())
+            .with_context(|| format!("failed to remove {}", entry.path().display()))?;
+        removed += 1;
+    }
+
+    Ok(removed)
+}
+
+fn benchmark_temp_dir(target: &DeviceTarget, started_at: &DateTime<Utc>) -> PathBuf {
+    target
+        .mount_point
+        .join(format!("{}{}", TEMP_DIR_PREFIX, started_at.format("%Y%m%d%H%M%S")))
+}
+
+fn remove_temp_dir_if_present(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
 }
 
 pub fn build_run_id(started_at: &DateTime<Utc>, target_id: &str) -> String {

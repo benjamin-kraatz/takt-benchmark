@@ -43,6 +43,8 @@ The GUI stores the selected target by `DeviceTarget.id`, so a stable identifier 
 
 GUI export is now picker-aware. The app keeps an editable export path, but it can also open a native save dialog through a GUI-only integration layer and remembers the last successful export directory separately from benchmark history.
 
+The GUI action bar stays outside the scrollable content so run, cancel, refresh, and cleanup controls remain reachable while browsing long histories and detailed charts.
+
 ## Execution flow
 
 1. Discover mounted benchmark targets.
@@ -52,6 +54,7 @@ GUI export is now picker-aware. The app keeps an editable export path, but it ca
 5. Emit progress updates with current throughput and elapsed time.
 6. Save the completed run to the local history store.
 7. Remove temporary files unless the caller explicitly requests they be retained.
+8. Optionally sweep leftover `.takt-*` directories on the selected target through the GUI cleanup flow.
 
 ## Why mounted filesystems first
 
