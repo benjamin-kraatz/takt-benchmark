@@ -13,10 +13,20 @@ use rfd::FileDialog;
 use takt_core::{
     BenchmarkProfile, BenchmarkRunRecord, BenchmarkType, DeviceTarget, ExportFormat, HistoryStore,
     ProfilePreset, ProgressUpdate, RunConfiguration, cleanup_benchmark_temp_dirs,
-    describe_export, discover_devices, export_runs_to_path, run_benchmark_suite,
+    discover_devices, export_runs_to_path, run_benchmark_suite,
 };
 
-use crate::views::{benchmark, comparison, detail, history};
+use crate::palette;
+use crate::views::{ExportAction, benchmark, comparison, detail, history, normalize_export_path};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveTab {
+    #[default]
+    Run,
+    Results,
+    History,
+    Compare,
+}
 
 pub struct TaktApp {
     devices: Vec<DeviceTarget>,
@@ -46,6 +56,7 @@ pub struct TaktApp {
     cleanup_status: Option<String>,
     live_plot_revision: u64,
     error_message: Option<String>,
+    active_tab: ActiveTab,
 }
 
 struct WorkerState {
@@ -89,11 +100,6 @@ enum BenchmarkStatusKind {
     Failure,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ExportControlAction {
-    Browse,
-    Export,
-}
 
 impl Default for TaktApp {
     fn default() -> Self {
@@ -138,12 +144,14 @@ impl Default for TaktApp {
             cleanup_status: None,
             live_plot_revision: 0,
             error_message: None,
+            active_tab: ActiveTab::default(),
         }
     }
 }
 
 impl TaktApp {
-    pub fn new(_creation_context: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(creation_context: &eframe::CreationContext<'_>) -> Self {
+        setup_visuals(&creation_context.egui_ctx);
         Self::default()
     }
 
@@ -269,6 +277,7 @@ impl TaktApp {
                                 self.tag_editor = run.tags.join(", ");
                                 self.note_editor = run.notes.clone().unwrap_or_default();
                                 self.error_message = None;
+                                self.active_tab = ActiveTab::Results;
                             }
                             Err(error) => {
                                 let cancelled = worker.cancel_requested
@@ -671,217 +680,313 @@ impl eframe::App for TaktApp {
         self.poll_worker();
         self.poll_picker();
         let is_running = self.is_running();
-        let progress_display = self.progress_display();
+        let ctx = ui.ctx().clone();
 
-        ui.group(|ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("Takt");
-                if ui
-                    .add_enabled(!is_running, egui::Button::new("Refresh Devices"))
-                    .clicked()
-                {
-                    self.refresh_devices();
-                }
-                if ui
-                    .add_enabled(!is_running, egui::Button::new("Clean Temp Dirs"))
-                    .clicked()
-                {
-                    self.request_cleanup_selected_temp_dirs();
-                }
-                let run_label = if is_running {
-                    "Running..."
-                } else {
-                    "Run Benchmark"
-                };
-                if ui
-                    .add_enabled(!is_running, egui::Button::new(run_label))
-                    .clicked()
-                {
-                    self.request_start_run();
-                }
-                let cancel_requested = self
-                    .worker
-                    .as_ref()
-                    .is_some_and(|worker| worker.cancel_requested);
-                if ui
-                    .add_enabled(
-                        is_running && !cancel_requested,
-                        egui::Button::new(if cancel_requested {
-                            "Cancelling..."
+        // Pre-compute owned data before panel closures borrow self
+        let progress_display = self.progress_display();
+        let benchmark_status_clone = self.benchmark_status.clone();
+        let selected_run_clone = self.selected_run().cloned();
+        let comparison_runs_owned: Vec<BenchmarkRunRecord> =
+            self.comparison_runs().into_iter().cloned().collect();
+        let trend_runs = self.trend_runs();
+        let previous_selected_run_id = self.selected_run_id.clone();
+
+        // ── Top bar ──────────────────────────────────────────────────────────
+        egui::Panel::top("top-bar")
+            .exact_size(40.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette::BG_PANEL)
+                    .inner_margin(egui::Margin::symmetric(14, 8)),
+            )
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Takt")
+                            .strong()
+                            .size(16.0)
+                            .color(palette::TEXT_PRIMARY),
+                    );
+                    ui.separator();
+                    for (tab, label) in [
+                        (ActiveTab::Run, "Run"),
+                        (ActiveTab::Results, "Results"),
+                        (ActiveTab::History, "History"),
+                        (ActiveTab::Compare, "Compare"),
+                    ] {
+                        let selected = self.active_tab == tab;
+                        let text = egui::RichText::new(label).color(if selected {
+                            palette::ACCENT
                         } else {
-                            "Cancel"
-                        }),
-                    )
-                    .clicked()
-                {
-                    self.cancel_run();
-                }
-                ui.add_enabled_ui(!is_running, |ui| {
-                    ui.checkbox(&mut self.auto_cleanup_temp_dirs, "Auto-clean temp dirs");
+                            palette::TEXT_SECONDARY
+                        });
+                        if ui.selectable_label(selected, text).clicked() {
+                            self.active_tab = tab;
+                        }
+                    }
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let cancel_requested = self
+                                .worker
+                                .as_ref()
+                                .is_some_and(|w| w.cancel_requested);
+                            if ui
+                                .add_enabled(
+                                    is_running && !cancel_requested,
+                                    egui::Button::new(
+                                        egui::RichText::new(if cancel_requested {
+                                            "Cancelling…"
+                                        } else {
+                                            "Cancel"
+                                        })
+                                        .color(palette::WARNING),
+                                    )
+                                    .fill(palette::BG_BORDER),
+                                )
+                                .clicked()
+                            {
+                                self.cancel_run();
+                            }
+                            let run_btn = egui::Button::new(
+                                egui::RichText::new(if is_running {
+                                    "Running…"
+                                } else {
+                                    "▶  Run"
+                                })
+                                .color(palette::TEXT_PRIMARY),
+                            )
+                            .fill(if is_running {
+                                palette::BG_BORDER
+                            } else {
+                                palette::ACCENT
+                            });
+                            if ui.add_enabled(!is_running, run_btn).clicked() {
+                                self.request_start_run();
+                            }
+                        },
+                    );
                 });
             });
-            if let Some(status) = &self.cleanup_status {
-                ui.label(status);
-            }
-        });
-        ui.separator();
 
-        egui::ScrollArea::vertical()
-            .scroll_source(
-                egui::scroll_area::ScrollSource::SCROLL_BAR
-                    | egui::scroll_area::ScrollSource::MOUSE_WHEEL,
+        // ── Left sidebar ─────────────────────────────────────────────────────
+        egui::Panel::left("sidebar")
+            .resizable(true)
+            .min_size(180.0)
+            .default_size(220.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette::BG_PANEL)
+                    .inner_margin(egui::Margin::same(12)),
             )
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-
-                benchmark::show_controls(
-                    ui,
-                    &self.devices,
-                    &mut self.selected_target,
-                    &mut self.profile,
-                    &mut self.selected_benchmarks,
-                    !is_running,
-                    progress_display.as_ref(),
-                    self.benchmark_status.as_ref().map(|status| benchmark::RunStatusBanner {
-                        kind: match status.kind {
-                            BenchmarkStatusKind::Success => benchmark::RunStatusKind::Success,
-                            BenchmarkStatusKind::Cancelled => benchmark::RunStatusKind::Warning,
-                            BenchmarkStatusKind::Failure => benchmark::RunStatusKind::Error,
-                        },
-                        title: status.title.as_str(),
-                        detail: status.detail.as_str(),
-                    }),
-                    self.live_plot_revision,
-                    &self.live_samples,
-                );
-
-                if let Some(error_message) = &self.error_message {
-                    ui.colored_label(egui::Color32::from_rgb(176, 58, 46), error_message);
-                }
-
-                if let Some(run) = &self.latest_run {
-                    ui.separator();
-                    benchmark::show_run_summary(ui, run);
-                    match render_export_controls(
-                        ui,
-                        &mut self.selected_export_format,
-                        &self.export_directory,
-                        &mut self.export_path,
-                        &mut self.export_status,
-                        std::slice::from_ref(run),
-                        !is_running,
-                        self.picker_pending,
-                    ) {
-                        Some(ExportControlAction::Browse) => {
-                            self.begin_export_picker(&run.display_name())
-                        }
-                        Some(ExportControlAction::Export) => {
-                            let runs = vec![run.clone()];
-                            self.export_runs(
-                                self.selected_export_format,
-                                "Immediate benchmark export",
-                                &runs,
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        benchmark::show_sidebar(
+                            ui,
+                            &self.devices,
+                            &mut self.selected_target,
+                            &mut self.profile,
+                            &mut self.selected_benchmarks,
+                            is_running,
+                        );
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        ui.add_enabled_ui(!is_running, |ui| {
+                            if ui
+                                .button(
+                                    egui::RichText::new("Refresh Devices")
+                                        .color(palette::TEXT_SECONDARY)
+                                        .size(12.0),
+                                )
+                                .clicked()
+                            {
+                                self.refresh_devices();
+                            }
+                            if ui
+                                .button(
+                                    egui::RichText::new("Clean Temp Dirs")
+                                        .color(palette::TEXT_SECONDARY)
+                                        .size(12.0),
+                                )
+                                .clicked()
+                            {
+                                self.request_cleanup_selected_temp_dirs();
+                            }
+                            ui.checkbox(&mut self.auto_cleanup_temp_dirs, "Auto-clean");
+                        });
+                        if let Some(status) = &self.cleanup_status {
+                            ui.label(
+                                egui::RichText::new(status)
+                                    .size(11.0)
+                                    .color(palette::TEXT_SECONDARY),
                             );
-                        }
-                        None => {}
-                    }
-                }
-
-                ui.separator();
-                let previous_selected_run = self.selected_run_id.clone();
-                history::show_history(
-                    ui,
-                    &self.history,
-                    &mut self.selected_run_id,
-                    &mut self.comparison_run_ids,
-                    &mut self.history_device_filter,
-                    &mut self.history_profile_filter,
-                    !is_running,
-                );
-                if self.selected_run_id != previous_selected_run {
-                    self.sync_annotation_editors();
-                }
-
-                if let Some(selected_run) = self.selected_run().cloned() {
-                    ui.separator();
-                    ui.heading("Annotations and Export");
-                    ui.add_enabled_ui(!is_running, |ui| {
-                        ui.label("Tags (comma separated)");
-                        ui.text_edit_singleline(&mut self.tag_editor);
-                        ui.label("Notes");
-                        ui.text_edit_multiline(&mut self.note_editor);
-                        if ui.button("Save tags and notes").clicked() {
-                            self.save_annotations();
                         }
                     });
-                    match render_export_controls(
-                        ui,
-                        &mut self.selected_export_format,
-                        &self.export_directory,
-                        &mut self.export_path,
-                        &mut self.export_status,
-                        std::slice::from_ref(&selected_run),
-                        !is_running,
-                        self.picker_pending,
-                    ) {
-                        Some(ExportControlAction::Browse) => {
-                            self.begin_export_picker(&selected_run.display_name())
-                        }
-                        Some(ExportControlAction::Export) => {
-                            let runs = vec![selected_run.clone()];
-                            self.export_runs(
-                                self.selected_export_format,
-                                "Detailed benchmark export",
-                                &runs,
-                            );
-                        }
-                        None => {}
-                    }
-                    ui.separator();
-                    detail::show_run_detail(ui, &selected_run);
-                }
-
-                let comparison_runs = self.comparison_runs();
-                let trend_runs = self.trend_runs();
-                ui.separator();
-                comparison::show_trend_view(ui, &trend_runs);
-                if comparison_runs.len() == 2 {
-                    ui.separator();
-                    comparison::show_two_run_comparison(ui, comparison_runs[0], comparison_runs[1]);
-                    let runs = vec![comparison_runs[0].clone(), comparison_runs[1].clone()];
-                    match render_export_controls(
-                        ui,
-                        &mut self.selected_export_format,
-                        &self.export_directory,
-                        &mut self.export_path,
-                        &mut self.export_status,
-                        &runs,
-                        !is_running,
-                        self.picker_pending,
-                    ) {
-                        Some(ExportControlAction::Browse) => {
-                            self.begin_export_picker("comparison-export")
-                        }
-                        Some(ExportControlAction::Export) => {
-                            self.export_runs(self.selected_export_format, "Comparison export", &runs);
-                        }
-                        None => {}
-                    }
-                }
-
-                if let Some(status) = &self.export_status {
-                    ui.separator();
-                    ui.label(status);
-                }
             });
 
-        self.show_pending_dialog(ui.ctx());
+        // ── Central panel ────────────────────────────────────────────────────
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(palette::BG_APP)
+                    .inner_margin(egui::Margin::same(16)),
+            )
+            .show_inside(ui, |ui| {
+                if let Some(error) = &self.error_message {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(100, 30, 30))
+                        .corner_radius(egui::CornerRadius::same(4))
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(error).color(egui::Color32::WHITE),
+                            );
+                        });
+                    ui.add_space(8.0);
+                }
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.active_tab {
+                        ActiveTab::Run => {
+                            let status_banner =
+                                benchmark_status_clone.as_ref().map(|s| {
+                                    benchmark::RunStatusBanner {
+                                        kind: match s.kind {
+                                            BenchmarkStatusKind::Success => {
+                                                benchmark::RunStatusKind::Success
+                                            }
+                                            BenchmarkStatusKind::Cancelled => {
+                                                benchmark::RunStatusKind::Warning
+                                            }
+                                            BenchmarkStatusKind::Failure => {
+                                                benchmark::RunStatusKind::Error
+                                            }
+                                        },
+                                        title: &s.title,
+                                        detail: &s.detail,
+                                    }
+                                });
+                            benchmark::show_run_tab(
+                                ui,
+                                progress_display.as_ref(),
+                                status_banner,
+                                self.live_plot_revision,
+                                &self.live_samples,
+                            );
+                        }
+                        ActiveTab::Results => {
+                            let response = detail::show_results_tab(
+                                ui,
+                                selected_run_clone.as_ref(),
+                                &mut self.selected_export_format,
+                                &self.export_directory,
+                                &mut self.export_path,
+                                &mut self.export_status,
+                                !is_running,
+                                self.picker_pending,
+                                &mut self.tag_editor,
+                                &mut self.note_editor,
+                            );
+                            if response.save_annotations {
+                                self.save_annotations();
+                            }
+                            if let Some(action) = response.export_action {
+                                match action {
+                                    ExportAction::Browse => {
+                                        let name = selected_run_clone
+                                            .as_ref()
+                                            .map(|r| r.display_name())
+                                            .unwrap_or_else(|| {
+                                                "benchmark-export".to_string()
+                                            });
+                                        self.begin_export_picker(&name);
+                                    }
+                                    ExportAction::Export => {
+                                        if let Some(run) = selected_run_clone.clone() {
+                                            let runs = vec![run];
+                                            self.export_runs(
+                                                self.selected_export_format,
+                                                "Detailed benchmark export",
+                                                &runs,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ActiveTab::History => {
+                            history::show_history_tab(
+                                ui,
+                                &self.history,
+                                &mut self.selected_run_id,
+                                &mut self.comparison_run_ids,
+                                &mut self.history_device_filter,
+                                &mut self.history_profile_filter,
+                                !is_running,
+                            );
+                        }
+                        ActiveTab::Compare => {
+                            let comparison_run_refs: Vec<&BenchmarkRunRecord> =
+                                comparison_runs_owned.iter().collect();
+                            let action = comparison::show_compare_tab(
+                                ui,
+                                &trend_runs,
+                                &comparison_run_refs,
+                                &mut self.selected_export_format,
+                                &self.export_directory,
+                                &mut self.export_path,
+                                &mut self.export_status,
+                                !is_running,
+                                self.picker_pending,
+                            );
+                            if let Some(action) = action {
+                                match action {
+                                    ExportAction::Browse => {
+                                        self.begin_export_picker("comparison-export")
+                                    }
+                                    ExportAction::Export => {
+                                        let runs: Vec<BenchmarkRunRecord> =
+                                            comparison_runs_owned.clone();
+                                        self.export_runs(
+                                            self.selected_export_format,
+                                            "Comparison export",
+                                            &runs,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    });
+            });
+
+        // Sync annotation editors when selected run changes (history tab)
+        if self.active_tab == ActiveTab::History
+            && self.selected_run_id != previous_selected_run_id
+        {
+            self.sync_annotation_editors();
+        }
+
+        self.show_pending_dialog(&ctx);
 
         if is_running {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+}
+
+fn setup_visuals(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+    visuals.window_fill = palette::BG_APP;
+    visuals.panel_fill = palette::BG_PANEL;
+    visuals.window_corner_radius = egui::CornerRadius::same(8);
+    visuals.menu_corner_radius = egui::CornerRadius::same(6);
+    visuals.window_shadow = egui::Shadow::NONE;
+    visuals.override_text_color = Some(palette::TEXT_PRIMARY);
+    ctx.set_visuals(visuals);
 }
 
 fn cleanup_message(target: &DeviceTarget, removed: usize) -> String {
@@ -902,111 +1007,6 @@ fn cleanup_message(target: &DeviceTarget, removed: usize) -> String {
 
 fn is_high_risk_benchmark_target(target: &DeviceTarget) -> bool {
     matches!(target.kind, takt_core::DeviceKind::BuiltIn)
-}
-
-fn render_export_controls(
-    ui: &mut egui::Ui,
-    selected_export_format: &mut ExportFormat,
-    export_directory: &Path,
-    export_path: &mut String,
-    export_status: &mut Option<String>,
-    runs: &[BenchmarkRunRecord],
-    controls_enabled: bool,
-    picker_pending: bool,
-) -> Option<ExportControlAction> {
-    let mut action = None;
-    let preview = describe_export(*selected_export_format, runs);
-    let normalized_path =
-        normalize_export_path(export_path, *selected_export_format, export_directory);
-    ui.add_enabled_ui(controls_enabled, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Format");
-            egui::ComboBox::from_id_salt(ui.next_auto_id())
-                .selected_text(selected_export_format.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        selected_export_format,
-                        ExportFormat::Json,
-                        ExportFormat::Json.label(),
-                    );
-                    ui.selectable_value(
-                        selected_export_format,
-                        ExportFormat::Markdown,
-                        ExportFormat::Markdown.label(),
-                    );
-                    ui.selectable_value(
-                        selected_export_format,
-                        ExportFormat::Html,
-                        ExportFormat::Html.label(),
-                    );
-                    ui.selectable_value(
-                        selected_export_format,
-                        ExportFormat::Png,
-                        ExportFormat::Png.label(),
-                    );
-                });
-            ui.label("Export path");
-            ui.text_edit_singleline(export_path);
-        });
-    });
-    ui.group(|ui| {
-        ui.strong("Export Preview");
-        ui.label(format!(
-            "{} run(s) will be exported as {}.",
-            preview.run_count,
-            preview.format.label()
-        ));
-        ui.label(format!("Destination: {}", normalized_path.display()));
-        if let Some(mode) = preview.png_mode {
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                ui.label("PNG mode:");
-                ui.strong(mode.label());
-            });
-            ui.label(mode.description());
-        } else {
-            ui.separator();
-            ui.label("Text exports include benchmark metrics, annotations, and device context. PNG-specific layout selection is only used when PNG is chosen.");
-        }
-        if let Some(first_run) = runs.first() {
-            let mut run_summary = vec![first_run.display_name()];
-            if runs.len() > 1 {
-                run_summary.push(format!("+ {} more run(s)", runs.len() - 1));
-            }
-            ui.label(format!("Selection: {}", run_summary.join(" ")));
-        }
-    });
-    ui.add_enabled_ui(controls_enabled, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    !picker_pending,
-                    egui::Button::new(if picker_pending {
-                        "Choosing..."
-                    } else {
-                        "Browse..."
-                    }),
-                )
-                .clicked()
-            {
-                action = Some(ExportControlAction::Browse);
-            }
-            if ui
-                .button(format!("Export {}", selected_export_format.label()))
-                .clicked()
-            {
-                action = Some(ExportControlAction::Export);
-            }
-            if ui.button("Clear status").clicked() {
-                *export_status = None;
-            }
-        });
-    });
-    if !controls_enabled {
-        ui.label("Export controls are disabled while a benchmark is running.");
-    }
-
-    action
 }
 
 fn benchmark_fraction(progress: &ProgressUpdate, profile: &BenchmarkProfile) -> Option<f32> {
@@ -1038,23 +1038,6 @@ fn format_duration(duration: Duration) -> String {
 
 fn format_mib(bytes: u64) -> String {
     format!("{:.1} MiB", bytes as f64 / 1024.0 / 1024.0)
-}
-
-fn normalize_export_path(path: &str, format: ExportFormat, export_directory: &Path) -> PathBuf {
-    let trimmed = path.trim();
-    let mut output = if trimmed.is_empty() {
-        export_directory.join(format!("benchmark-export.{}", format.extension()))
-    } else {
-        PathBuf::from(trimmed)
-    };
-    if output.extension().is_none() {
-        output.set_extension(format.extension());
-    }
-    if output.is_relative() {
-        export_directory.join(output)
-    } else {
-        output
-    }
 }
 
 fn suggested_file_name(suggestion: &str, format: ExportFormat) -> String {

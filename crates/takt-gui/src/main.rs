@@ -1,4 +1,5 @@
 mod app;
+mod palette;
 mod views;
 
 use eframe::egui;
